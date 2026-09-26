@@ -5,18 +5,32 @@
 // Responsibilities: /start, /app, /task, /tasks, /done, and Telegram deep
 // links for the invite flow. Notification delivery itself lives in
 // lib/notifications.ts + the /api/notifications/cron route, not here.
+// Main menu keyboard (bot/menu.ts) and the client-search module (bot/leads)
+// are registered below; the commands above work exactly as before.
 
-import { Bot, InlineKeyboard } from "grammy";
+import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "../lib/prisma";
 import { getUserWorkspace } from "../lib/telegram-auth";
 import { parseQuickAdd } from "../lib/quick-add-parser";
+import { MENU, mainMenuKeyboard } from "./menu";
+import { chatState } from "./state";
+import { registerLeadsModule } from "./leads";
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not configured");
 const appUrl = process.env.TELEGRAM_WEBAPP_URL;
 if (!appUrl) throw new Error("TELEGRAM_WEBAPP_URL is not configured");
 
-const bot = new Bot(token);
+// TELEGRAM_API_ROOT — необязательный адрес Bot API (свой Bot API сервер или
+// тестовый стенд, см. scripts/leads-e2e.ts). По умолчанию — api.telegram.org.
+const apiRoot = process.env.TELEGRAM_API_ROOT?.trim();
+const bot = new Bot(token, apiRoot ? { client: { apiRoot } } : undefined);
+
+// Любая команда прерывает начатый пошаговый ввод (мастер поиска и т. п.).
+bot.on("message:text", async (ctx, next) => {
+  if (ctx.message.text.startsWith("/")) chatState.clear(ctx.chat.id);
+  await next();
+});
 
 async function resolveUser(telegramId: number, first: string, username?: string) {
   return prisma.user.upsert({
@@ -57,7 +71,14 @@ bot.command("start", async (ctx) => {
     `Tandem — приватное рабочее пространство для двоих. Откройте приложение, чтобы начать, или используйте /task для быстрого добавления задачи.`,
     { reply_markup: openAppKeyboard() }
   );
+  await sendMainMenu(ctx);
 });
+
+async function sendMainMenu(ctx: Context) {
+  await ctx.reply("Меню — кнопками внизу 👇", { reply_markup: mainMenuKeyboard() });
+}
+
+bot.command("menu", sendMainMenu);
 
 bot.command("app", async (ctx) => {
   await ctx.reply("Открываю Tandem.", { reply_markup: openAppKeyboard() });
@@ -69,7 +90,15 @@ bot.command("task", async (ctx) => {
     await ctx.reply("Использование: /task Закончить сайт завтра 18:00");
     return;
   }
+  await createQuickTask(ctx, text);
+});
 
+bot.hears(MENU.newTask, async (ctx) => {
+  chatState.set(ctx.chat.id, { kind: "new_task" });
+  await ctx.reply("Напиши задачу одним сообщением, например: Закончить сайт завтра 18:00");
+});
+
+async function createQuickTask(ctx: Context, text: string) {
   const user = await resolveUser(ctx.from!.id, ctx.from!.first_name, ctx.from!.username);
   const workspace = await getUserWorkspace(user.id);
   if (!workspace) {
@@ -93,9 +122,15 @@ bot.command("task", async (ctx) => {
     `Создана задача «${task.title}»${parsed.deadline ? ` — срок ${parsed.deadline.toLocaleString("ru-RU")}` : " — срок через 24ч (время не распознано)"}.`,
     { reply_markup: openAppKeyboard() }
   );
+}
+
+bot.command("tasks", replyActiveTasks);
+bot.hears(MENU.tasks, async (ctx) => {
+  chatState.clear(ctx.chat.id);
+  await replyActiveTasks(ctx);
 });
 
-bot.command("tasks", async (ctx) => {
+async function replyActiveTasks(ctx: Context) {
   const user = await resolveUser(ctx.from!.id, ctx.from!.first_name, ctx.from!.username);
   const workspace = await getUserWorkspace(user.id);
   if (!workspace) {
@@ -122,7 +157,7 @@ bot.command("tasks", async (ctx) => {
     formatCountdown(next.deadlineAt),
   ];
   await ctx.reply(lines.join("\n"), { reply_markup: openAppKeyboard() });
-});
+}
 
 function formatCountdown(deadline: Date) {
   const diff = deadline.getTime() - Date.now();
@@ -131,6 +166,16 @@ function formatCountdown(deadline: Date) {
   const m = Math.floor((diff % 3600_000) / 60_000);
   return `Осталось ${h} ч ${m} мин`;
 }
+
+// Модуль «Поиск клиентов» (bot/leads, lib/leads): меню, мастер поиска, лиды.
+registerLeadsModule(bot, { resolveUser, openAppKeyboard });
+
+// «➕ Новая задача» из меню: следующее сообщение — текст задачи (как /task).
+bot.on("message:text", async (ctx, next) => {
+  if (chatState.get(ctx.chat.id)?.kind !== "new_task") return next();
+  chatState.clear(ctx.chat.id);
+  await createQuickTask(ctx, ctx.message.text.trim());
+});
 
 bot.catch((err) => console.error("Bot error:", err));
 

@@ -12,7 +12,8 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "lint": "next lint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "tsx scripts/leads-e2e.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.658.1",

@@ -72,6 +72,11 @@ model Workspace {
   members     WorkspaceMember[]
   tasks       Task[]
   recurrences RecurringTask[]
+
+  // модуль поиска клиентов (см. раздел «Leads» в конце файла)
+  leads        Lead[]
+  leadSearches LeadSearch[]
+  leadSettings LeadSettings?
 }
 
 model WorkspaceMember {
@@ -113,6 +118,7 @@ model Task {
   attachments TaskAttachment[]
   activity    TaskActivity[]
   notifications Notification[]
+  leadLinks   LeadTask[] // только обратная связь Prisma — колонок в Task не добавляет
 
   @@index([workspaceId, status])
   @@index([workspaceId, deadlineAt])
@@ -225,4 +231,157 @@ model Notification {
   // prevents duplicate scheduling of the same reminder for the same task
   @@unique([taskId, userId, type])
   @@index([scheduledFor, sentAt])
+}
+
+// ---------------------------------------------------------------------------
+// Leads — модуль поиска клиентов на разработку сайтов (lib/leads, bot/leads).
+// Только новые таблицы: существующие модели выше не меняются (добавлены лишь
+// обратные связи Prisma, которые колонок не создают).
+// ---------------------------------------------------------------------------
+
+enum LeadStatus {
+  NEW         // 🆕 Новый
+  TO_CONTACT  // 📩 Связаться
+  CONTACTED   // 💬 Написали
+  WAITING     // ⏳ Ждём ответа
+  NEGOTIATION // 🤝 Переговоры
+  CLIENT      // 💰 Клиент
+  REJECTED    // ❌ Отказ
+  NOT_FIT     // 🚫 Не подходит
+}
+
+enum LeadPotential {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum LeadSearchStatus {
+  RUNNING
+  DONE
+  FAILED
+}
+
+// Один найденный бизнес. Лиды общие для рабочего пространства (как и задачи).
+// Дубли определяются в lib/leads/dedupe.ts по id в источнике, домену,
+// телефону и названию+адресу; уникальные индексы ниже — страховка на уровне БД.
+model Lead {
+  id          String @id @default(cuid())
+  workspaceId String
+
+  name        String
+  normName    String // нормализованное название для поиска дублей
+  city        String
+  niche       String
+  category    String? // категория из источника (например, «Барбершоп»)
+  address     String?
+  normAddress String?
+  lat         Float?
+  lon         Float?
+
+  websiteKind String  @default("none") // own | social | booking | none
+  website     String? // собственный сайт (соцсети и таплинки сюда не попадают)
+  domain      String?
+  bookingPage Json? // { name: "YCLIENTS", url } — если вместо сайта страница записи
+  phones     String[] @default([])
+  normPhones String[] @default([]) // только цифры, 7XXXXXXXXXX
+  emails     String[] @default([])
+  socials    Json? // [{ type: "instagram", url: "https://..." }]
+  hours      String?
+
+  yandexId String?
+  osmId    String? // "node/123", "way/456"
+  sources  Json // [{ provider: "yandex" | "osm", url: "https://..." }]
+
+  chainSize  Int     @default(1) // сколько точек с таким названием было в выдаче
+  nicheMatch Boolean @default(true)
+
+  siteAudit    Json? // результат проверки сайта (lib/leads/site-audit.ts)
+  score        Int           @default(0) // 0–100: соответствие критериям поиска клиента
+  scoreReasons Json? // [{ label, points }]
+  potential    LeadPotential @default(MEDIUM)
+  offer        String? // что можно предложить
+
+  status          LeadStatus @default(NEW)
+  statusChangedAt DateTime   @default(now())
+  saved           Boolean    @default(false) // ❤️
+  proposal        String? // последний сгенерированный текст предложения
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace     Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  searchResults LeadSearchResult[]
+  tasks         LeadTask[]
+
+  @@unique([workspaceId, yandexId])
+  @@unique([workspaceId, osmId])
+  @@index([workspaceId, status])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, domain])
+  @@index([workspaceId, normName])
+}
+
+// Один запуск поиска (история поиска). «Найти ещё» — новый запуск с parentId.
+model LeadSearch {
+  id          String           @id @default(cuid())
+  workspaceId String
+  userId      String
+  chatId      BigInt?
+  niche       String
+  city        String
+  requested   Int
+  extra       String? // «Дополнительно» как ввёл пользователь
+  osmOnly     Boolean          @default(false)
+  parentId    String?
+  status      LeadSearchStatus @default(RUNNING)
+  found       Int              @default(0)
+  checked     Int              @default(0)
+  filtered    Int              @default(0)
+  nextOffset  Int              @default(0) // смещение в выдаче источника для «Найти ещё»
+  warnings    Json? // ["Не удалось получить данные из OSM", ...]
+  rejectedKeys Json? // отклонённые кандидаты — «Найти ещё» их не перепроверяет
+  error       String?
+  createdAt   DateTime         @default(now())
+  finishedAt  DateTime?
+
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  results   LeadSearchResult[]
+
+  @@index([workspaceId, createdAt])
+}
+
+model LeadSearchResult {
+  id          String  @id @default(cuid())
+  searchId    String
+  leadId      String
+  position    Int
+  wasExisting Boolean @default(false) // лид уже был в базе до этого поиска
+
+  search LeadSearch @relation(fields: [searchId], references: [id], onDelete: Cascade)
+  lead   Lead       @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@unique([searchId, leadId])
+  @@unique([searchId, position])
+}
+
+// Связь «лид → задача». Таблица Task не меняется: связь живёт здесь.
+model LeadTask {
+  id        String   @id @default(cuid())
+  leadId    String
+  taskId    String   @unique
+  createdAt DateTime @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+}
+
+model LeadSettings {
+  workspaceId String @id
+  avgCheck    Int    @default(50000) // средний чек, ₽ — только для расчёта в статистике
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
