@@ -69,7 +69,7 @@ export function scoreLead(draft: LeadDraft, requirements: SearchRequirements, no
         weakOwnSite = true;
         add(22, "нет адаптации под телефон (нет meta viewport)");
       }
-      if (!a.hasForm && !a.bookingWidget) add(8, "на сайте нет формы заявки или онлайн-записи");
+      if (!a.hasForm && !a.bookingWidget) add(8, "на главной странице не найдена форма заявки или онлайн-запись");
       if (!a.https) add(6, "сайт без HTTPS");
       if (!a.hasCta) add(4, "нет явного призыва: записаться / заказать / позвонить");
       if (a.copyrightYear != null && a.copyrightYear <= now.getFullYear() - 3) {

@@ -8,7 +8,7 @@ export function siteIssues(audit: SiteAudit | null | undefined, now = new Date()
   if (!audit || audit.status !== "ok") return [];
   const issues: string[] = [];
   if (!audit.hasViewport) issues.push("нет адаптации под телефон");
-  if (!audit.hasForm && !audit.bookingWidget) issues.push("нет формы заявки");
+  if (!audit.hasForm && !audit.bookingWidget) issues.push("на главной нет формы заявки");
   if (!audit.https) issues.push("без HTTPS");
   if (audit.copyrightYear && audit.copyrightYear <= now.getFullYear() - 3) issues.push(`© ${audit.copyrightYear}`);
   if (audit.outdated?.length) issues.push("устаревшая вёрстка");

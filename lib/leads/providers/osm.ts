@@ -132,17 +132,29 @@ export function parseOverpass(json: { elements?: OverpassElement[] }): BusinessC
   return out.sort((a, b) => a.externalId.localeCompare(b.externalId));
 }
 
-export async function searchOsm(niche: NicheSpec, city: string): Promise<BusinessCandidate[]> {
+export interface OsmOptions {
+  /** Сколько всего можно ждать OSM (мс). Как дополнение к Яндексу — мало, как единственный источник — много. */
+  budgetMs?: number;
+}
+
+export async function searchOsm(niche: NicheSpec, city: string, opts: OsmOptions = {}): Promise<BusinessCandidate[]> {
   if (niche.key === "custom" ? !niche.keywords.length : !niche.osmFilters.length) return [];
+  const started = Date.now();
+  const budget = opts.budgetMs ?? 90_000;
   const bbox = await geocodeCity(city);
   const body = new URLSearchParams({ data: buildOverpassQuery(niche, bbox) }).toString();
   const errors: string[] = [];
-  // Публичные серверы Overpass часто перегружены — пробуем по очереди.
+  // Публичные серверы Overpass часто перегружены — пробуем по очереди, пока не кончится бюджет времени.
   for (const url of leadsConfig.overpassUrls) {
+    const left = budget - (Date.now() - started);
+    if (left < 3_000) {
+      errors.push("время ожидания вышло");
+      break;
+    }
     try {
       const json = await fetchJson<{ elements?: OverpassElement[] }>(url, {
         method: "POST",
-        timeoutMs: 45_000, // крупный город отдаётся за ~30 с; перегруженные зеркала обычно падают с 504 быстро
+        timeoutMs: Math.min(45_000, left), // крупный город отдаётся за ~30 с; перегруженные зеркала обычно падают с 504 быстро
         headers: { "User-Agent": leadsConfig.userAgent, "Content-Type": "application/x-www-form-urlencoded" },
         body,
       });

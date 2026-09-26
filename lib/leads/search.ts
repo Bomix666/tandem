@@ -57,7 +57,7 @@ export interface SearchDeps {
   yandexConfigured: boolean;
   osmEnabled: boolean;
   yandex: (p: { text: string; skip: number }) => Promise<{ items: BusinessCandidate[] }>;
-  osm: (niche: NicheSpec, city: string) => Promise<BusinessCandidate[]>;
+  osm: (niche: NicheSpec, city: string, opts?: { budgetMs?: number }) => Promise<BusinessCandidate[]>;
   audit: (url: string) => Promise<SiteAudit>;
   index: LeadIndex;
   onProgress?: (p: SearchProgress) => void;
@@ -67,6 +67,9 @@ export interface SearchDeps {
 
 export class SearchNotConfiguredError extends Error {}
 export class SearchFailedError extends Error {}
+
+const OSM_SUPPLEMENT_BUDGET_MS = 20_000;
+const OSM_ONLY_BUDGET_MS = 90_000;
 
 const WEBSITE_RANK: Record<WebsiteKind, number> = { none: 0, social: 1, booking: 2, own: 3 };
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -126,7 +129,8 @@ export async function runLeadSearch(input: SearchInput, deps: SearchDeps): Promi
   if (deps.osmEnabled) {
     report(useYandex ? "Сверяю с OpenStreetMap…" : "Ищу в OpenStreetMap…");
     try {
-      osmItems = await deps.osm(input.niche, input.city);
+      // OSM как дополнение к Яндексу не должен задерживать поиск: ждём его недолго.
+      osmItems = await deps.osm(input.niche, input.city, { budgetMs: useYandex ? OSM_SUPPLEMENT_BUDGET_MS : OSM_ONLY_BUDGET_MS });
       osmOk = true;
     } catch (err) {
       if (!useYandex) {
