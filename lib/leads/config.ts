@@ -20,12 +20,14 @@ export const leadsConfig = {
    */
   get overpassUrls(): string[] {
     const fromEnv = process.env.OVERPASS_API_URL?.split(",").map((s) => s.trim()).filter(Boolean);
+    // порядок — по тому, какие зеркала реально отвечали из РФ при проверке (сентябрь 2026)
     return fromEnv?.length
       ? fromEnv
       : [
+          "https://overpass.openstreetmap.fr/api/interpreter",
+          "https://z.overpass-api.de/api/interpreter",
           "https://overpass-api.de/api/interpreter",
           "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-          "https://overpass.kumi.systems/api/interpreter",
         ];
   },
   get nominatimUrl(): string {

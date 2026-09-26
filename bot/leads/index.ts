@@ -368,10 +368,11 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
     );
   }
 
-  async function findMore(ctx: Context, c: Ctx, searchId: string): Promise<string | undefined> {
-    const parent = await getSearch(searchId, c.workspace.id);
-    if (!parent) return "Поиск не найден";
-    if (!parent.osmOnly && !isYandexConfigured()) {
+  /** «Найти ещё» (продолжение с пропуском найденного) или «Повторить» (тот же поиск заново). */
+  async function relaunch(ctx: Context, c: Ctx, searchId: string, mode: "more" | "retry"): Promise<string | undefined> {
+    const prev = await getSearch(searchId, c.workspace.id);
+    if (!prev) return "Поиск не найден";
+    if (!prev.osmOnly && !isYandexConfigured()) {
       await ctx.reply(notConfiguredText(), { parse_mode: "HTML" });
       return;
     }
@@ -379,14 +380,15 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
       chatId: c.chatId,
       workspaceId: c.workspace.id,
       userId: c.user.id,
-      niche: parent.niche,
-      city: parent.city,
-      requested: parent.requested,
-      extra: parent.extra,
-      osmOnly: parent.osmOnly,
-      parent,
+      niche: prev.niche,
+      city: prev.city,
+      requested: prev.requested,
+      extra: prev.extra,
+      osmOnly: prev.osmOnly,
+      parent: mode === "more" ? prev : undefined,
     });
-    return result === "busy" ? "Поиск уже идёт — дождись результата" : "Ищу ещё…";
+    if (result === "busy") return "Поиск уже идёт — дождись результата";
+    return mode === "more" ? "Ищу ещё…" : "Повторяю поиск…";
   }
 
   // ---------------- маршрутизация кнопок ----------------
@@ -491,7 +493,9 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
         return;
       }
       case "more":
-        return findMore(ctx, c, a1);
+        return relaunch(ctx, c, a1, "more");
+      case "retry":
+        return relaunch(ctx, c, a1, "retry");
       case "set":
         if (a1 === "avg") {
           chatState.set(c.chatId, { kind: "lead_avg_check" });

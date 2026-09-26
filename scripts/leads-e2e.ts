@@ -377,7 +377,8 @@ async function main() {
     check("поиск в фоне: было сообщение о прогрессе", calls.slice(s1.mark).some((c) => String(c.body.text ?? "").includes("Ищу подходящие бизнесы")));
     check("итог поиска: 5 лидов", s1.summary.text.includes("<b>5 лидов</b>"), s1.summary.text);
     check("итог: разбивка по потенциалу", /🔥 Высокий потенциал: 2[\s\S]*🟡 Средний: 3/.test(s1.summary.text), s1.summary.text);
-    check("итог: отфильтровано 1 (без контактов)", s1.summary.text.includes("Отфильтровано: 1"), s1.summary.text);
+    // бизнес без контактов стоит в конце очереди — 5 лидов набираются раньше, лишних проверок нет
+    check("итог: проверено 5, без лишних проверок", s1.summary.text.includes("Проверено: 5 · Отфильтровано: 0"), s1.summary.text);
 
     const leads1 = await prisma.lead.findMany({ where: { workspaceId: ws.id } });
     check("в БД 5 лидов", leads1.length === 5, String(leads1.length));
@@ -547,10 +548,18 @@ async function main() {
     press(st4.message_id, "Пропустить");
     const nc = await waitMessage(mark, (m) => m.text.includes("пока не настроен"), "не настроено");
     check("без ключа Яндекса — «⚠️ Поиск клиентов пока не настроен»", !buttons(nc.message_id).some((b) => b.text === "✅ Начать поиск"));
-    const m2 = calls.length;
+    // OSM лежит → понятная ошибка и кнопка «Повторить»; OSM ожил → повтор проходит
+    state.osmMode = "500";
+    let m2 = calls.length;
     press(nc.message_id, "🗺 Искать только по OpenStreetMap");
-    const osmOnly = await waitMessage(m2, (m) => m.text.includes("Поиск завершён"), "только OSM", 30000);
-    check("поиск только по OSM работает без ключа", osmOnly.text.includes("Источник: OpenStreetMap"), osmOnly.text);
+    const failed = await waitMessage(m2, (m) => m.text.includes("Поиск не выполнен"), "OSM недоступен", 30000);
+    check("OSM недоступен — понятная ошибка без технического мусора", failed.text.includes("OpenStreetMap сейчас не отвечает") && !failed.text.includes("&lt;?xml"), failed.text);
+    check("у неудачного поиска кнопка «🔁 Повторить поиск»", buttons(failed.message_id).some((b) => b.text === "🔁 Повторить поиск"));
+    state.osmMode = "ok";
+    m2 = calls.length;
+    press(failed.message_id, "🔁 Повторить поиск");
+    const osmOnly = await waitMessage(m2, (m) => m.text.includes("Поиск завершён"), "повтор поиска только по OSM", 30000);
+    check("поиск только по OSM работает без ключа (после повтора)", osmOnly.text.includes("Источник: OpenStreetMap"), osmOnly.text);
 
     // ===== старые команды после всего =====
     mark = calls.length;

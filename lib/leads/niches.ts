@@ -28,8 +28,14 @@ export const NICHE_PRESETS: NicheSpec[] = [
     singular: "барбершоп",
     accusative: "ваш барбершоп",
     query: "барбершоп",
-    keywords: ["барбер", "barber", "парикмах"],
-    osmFilters: ['["shop"="hairdresser"]'],
+    // «парикмахерская» — не барбершоп: такие точки остаются в выдаче, но без балла за нишу
+    keywords: ["барбер", "barber"],
+    // только мужские парикмахерские: все парикмахерские Москвы упираются в лимит выдачи
+    osmFilters: [
+      '["shop"="hairdresser"]["hairdresser"="barber"]',
+      '["shop"="hairdresser"]["male"="yes"]',
+      '["shop"="hairdresser"]["name"~"барбер|barber",i]',
+    ],
     offer: [
       item("услуги и цены", "услугами и ценами"),
       item("мастера", "мастерами"),

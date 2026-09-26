@@ -129,7 +129,14 @@ export async function runLeadSearch(input: SearchInput, deps: SearchDeps): Promi
       osmItems = await deps.osm(input.niche, input.city);
       osmOk = true;
     } catch (err) {
-      if (!useYandex) throw new SearchFailedError(`Не удалось получить данные ни из одного источника (${errMsg(err)}).`);
+      if (!useYandex) {
+        throw new SearchFailedError(
+          (input.osmOnly
+            ? "OpenStreetMap сейчас не отвечает — его публичные серверы перегружены. Попробуй повторить через несколько минут. Надёжнее всего подключить ключ Яндекса — это основной источник."
+            : "Не удалось получить данные ни из Яндекса, ни из OpenStreetMap. Попробуй повторить через несколько минут.") +
+            `\n\nПодробности: ${errMsg(err)}`
+        );
+      }
       warnings.push("⚠️ Не удалось получить данные из OpenStreetMap.\nПродолжаю поиск...");
       report();
     }
@@ -173,12 +180,23 @@ export async function runLeadSearch(input: SearchInput, deps: SearchDeps): Promi
     unique.push([i, d]);
   });
 
-  // --- 5. порядок: сначала без собственного сайта, внутри — порядок источника ---
-  const queue = unique.sort(([ia, a], [ib, b]) => WEBSITE_RANK[a.websiteKind] - WEBSITE_RANK[b.websiteKind] || ia - ib);
+  // --- 5. порядок: сначала те, с кем можно связаться, затем — точно из ниши,
+  // затем — без собственного сайта; внутри — порядок источника. В OSM у многих
+  // точек нет ни телефона, ни сайта — они уходят в конец и не съедают лимит.
+  const contactRank = (d: LeadDraft) => (d.phones.length || d.emails.length || d.socials.length || d.websiteKind !== "none" ? 0 : 1);
+  const queue = unique.sort(
+    ([ia, a], [ib, b]) =>
+      contactRank(a) - contactRank(b) ||
+      Number(b.nicheMatch) - Number(a.nicheMatch) ||
+      WEBSITE_RANK[a.websiteKind] - WEBSITE_RANK[b.websiteKind] ||
+      ia - ib
+  );
 
   // --- 6. проверка сайтов и отбор (несколько параллельно, бот при этом не ждёт) ---
   report("Проверяю бизнесы и сайты…");
-  const maxChecks = Math.min(80, input.requested * 4);
+  // Лимит — только на загрузку сайтов (сеть, до 10 с каждый); остальное считается мгновенно.
+  const maxAudits = Math.min(45, input.requested * 3);
+  let audits = 0;
   const accepted: AcceptedLead[] = [];
   const rejectedKeys: string[] = [];
   const processed = new Set<number>();
@@ -186,7 +204,7 @@ export async function runLeadSearch(input: SearchInput, deps: SearchDeps): Promi
   let cursor = 0;
 
   const worker = async () => {
-    while (cursor < queue.length && accepted.length < input.requested && progress.checked < maxChecks) {
+    while (cursor < queue.length && accepted.length < input.requested) {
       const [origIdx, d] = queue[cursor++]!;
       const key = rejectKey(d);
       const existing = deps.index.find(d);
@@ -195,9 +213,12 @@ export async function runLeadSearch(input: SearchInput, deps: SearchDeps): Promi
         processed.add(origIdx);
         continue;
       }
+      const needsAudit = d.websiteKind === "own" && !!d.website && !input.requirements.noOwnSite;
+      if (needsAudit && audits >= maxAudits) continue; // не проверили — останется для «Найти ещё»
       progress.checked++;
-      if (d.websiteKind === "own" && d.website && !input.requirements.noOwnSite) {
-        applyAudit(d, await deps.audit(d.website));
+      if (needsAudit) {
+        audits++;
+        applyAudit(d, await deps.audit(d.website!));
       }
       const result = scoreLead(d, input.requirements, now);
       if (result.reject) {

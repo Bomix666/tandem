@@ -4,7 +4,7 @@
 // User-Agent — поэтому город кешируем, а запросов на поиск делаем по одному.
 
 import { leadsConfig } from "../config";
-import { fetchJson } from "../http";
+import { fetchJson, HttpError } from "../http";
 import type { NicheSpec } from "../niches";
 import { escapeRegExp, socialFromHandle, uniq } from "../normalize";
 import type { BusinessCandidate, SocialLink, SocialType } from "../types";
@@ -30,7 +30,8 @@ export async function geocodeCity(city: string): Promise<BBox> {
   try {
     rows = await fetchJson(url.toString(), { timeoutMs: 15_000, headers: { "User-Agent": leadsConfig.userAgent } });
   } catch (err) {
-    throw new ProviderError(`OSM: не удалось определить границы города (${(err as Error).message})`, "osm");
+    const why = err instanceof HttpError ? `HTTP ${err.status}` : (err as Error).name === "TimeoutError" ? "не ответил вовремя" : "нет соединения";
+    throw new ProviderError(`OpenStreetMap: не удалось определить границы города (${why})`, "osm");
   }
   const bb = rows[0]?.boundingbox?.map(Number);
   if (!bb || bb.length !== 4 || bb.some((n) => Number.isNaN(n))) {
@@ -108,12 +109,14 @@ export function parseOverpass(json: { elements?: OverpassElement[] }): BusinessC
     const street = t["addr:street"];
     const house = t["addr:housenumber"];
     const kindTag = t.shop ?? t.amenity ?? t.craft ?? t.leisure ?? t.healthcare;
+    // мужская парикмахерская в OSM: shop=hairdresser + hairdresser=barber или male=yes
+    const isBarber = t.shop === "hairdresser" && (t.hairdresser === "barber" || t.male === "yes");
 
     out.push({
       provider: "osm",
       externalId: `${el.type}/${el.id}`,
       name: t.name,
-      categories: kindTag ? [CATEGORY_RU[kindTag] ?? kindTag] : [],
+      categories: isBarber ? ["Барбершоп"] : kindTag ? [CATEGORY_RU[kindTag] ?? kindTag] : [],
       address: street ? [street, house].filter(Boolean).join(", ") : undefined,
       lat,
       lon,
@@ -139,15 +142,16 @@ export async function searchOsm(niche: NicheSpec, city: string): Promise<Busines
     try {
       const json = await fetchJson<{ elements?: OverpassElement[] }>(url, {
         method: "POST",
-        timeoutMs: 30_000, // до трёх серверов — не больше ~1,5 минуты на весь OSM
+        timeoutMs: 45_000, // крупный город отдаётся за ~30 с; перегруженные зеркала обычно падают с 504 быстро
         headers: { "User-Agent": leadsConfig.userAgent, "Content-Type": "application/x-www-form-urlencoded" },
         body,
       });
       return parseOverpass(json);
     } catch (err) {
       const e = err as Error;
-      errors.push(`${new URL(url).host}: ${e.name === "TimeoutError" ? "не ответил вовремя" : e.message.split("\n")[0]!.slice(0, 60)}`);
+      const why = err instanceof HttpError ? `HTTP ${err.status}` : e.name === "TimeoutError" ? "не ответил вовремя" : "нет соединения";
+      errors.push(`${new URL(url).host}: ${why}`);
     }
   }
-  throw new ProviderError(`OSM: серверы Overpass недоступны (${errors.join("; ")})`, "osm");
+  throw new ProviderError(`серверы OpenStreetMap не отвечают (${errors.join("; ")})`, "osm");
 }

@@ -84,10 +84,38 @@ describe("parseOverpass", () => {
   });
 });
 
+describe("барбершоп ≠ любая парикмахерская", () => {
+  it("OSM-теги hairdresser=barber / male=yes → категория «Барбершоп»", () => {
+    const items = parseOverpass({
+      elements: [
+        { type: "node", id: 1, tags: { name: "Мужской зал", shop: "hairdresser", hairdresser: "barber" } },
+        { type: "node", id: 2, tags: { name: "Салон Анна", shop: "hairdresser" } },
+      ],
+    });
+    expect(items.map((i) => i.categories[0])).toEqual(["Барбершоп", "Парикмахерская"]);
+  });
+  it("обычная парикмахерская не засчитывается как совпадение с нишей «Барбершопы»", async () => {
+    const { matchesNiche } = await import("../niches");
+    const n = resolveNiche("Барбершопы");
+    expect(matchesNiche(n, ["Парикмахерская"], "Салон Анна")).toBe(false);
+    expect(matchesNiche(n, ["Парикмахерская"], "Barber Club")).toBe(true);
+    expect(matchesNiche(n, ["Барбершоп"], "Топор")).toBe(true);
+  });
+});
+
 describe("buildOverpassQuery", () => {
   it("готовая ниша — быстрый поиск по тегам внутри границ города", () => {
-    const q = buildOverpassQuery(resolveNiche("барбершоп"), [55.1, 36.8, 56.0, 37.9]);
-    expect(q).toBe('[out:json][timeout:60];(nwr["shop"="hairdresser"]["name"](55.1,36.8,56,37.9););out center tags 1500;');
+    const q = buildOverpassQuery(resolveNiche("Стоматологии"), [55.1, 36.8, 56.0, 37.9]);
+    expect(q).toBe(
+      '[out:json][timeout:60];(nwr["amenity"="dentist"]["name"](55.1,36.8,56,37.9);nwr["healthcare"="dentist"]["name"](55.1,36.8,56,37.9););out center tags 1500;'
+    );
+  });
+  it("барбершопы — только мужские парикмахерские, а не все подряд", () => {
+    const q = buildOverpassQuery(resolveNiche("барбершоп"), [1, 2, 3, 4]);
+    expect(q).toContain('nwr["shop"="hairdresser"]["hairdresser"="barber"]["name"](1,2,3,4);');
+    expect(q).toContain('nwr["shop"="hairdresser"]["male"="yes"]["name"](1,2,3,4);');
+    expect(q).toContain('nwr["shop"="hairdresser"]["name"~"барбер|barber",i]["name"](1,2,3,4);');
+    expect(q).not.toContain('nwr["shop"="hairdresser"]["name"](1,2,3,4);');
   });
   it("своя ниша — основа слова в названии, но только среди заведений", () => {
     const q = buildOverpassQuery(resolveNiche("Автомойки"), [1, 2, 3, 4]);

@@ -135,6 +135,43 @@ describe("runLeadSearch", () => {
     expect(out.accepted.every((a) => a.draft.websiteKind !== "own")).toBe(true);
   });
 
+  it("точки без контактов не съедают лимит: лиды с контактами всё равно находятся", async () => {
+    // как в OSM по Москве: десятки точек только с названием и немного — с телефоном
+    const bare = Array.from({ length: 60 }, (_, i) =>
+      makeCandidate({ provider: "osm", externalId: `node/${i}`, name: `Точка ${i}`, phones: [], hours: undefined, lat: 55 + i / 100, lon: 37 })
+    );
+    const withPhone = Array.from({ length: 3 }, (_, i) =>
+      makeCandidate({ provider: "osm", externalId: `way/${i}`, name: `С телефоном ${i}`, phones: [`+7 495 000-11-2${i}`], lat: 56 + i / 100, lon: 38 })
+    );
+    const out = await runLeadSearch(input({ osmOnly: true, requested: 3 }), deps({ yandexConfigured: false, osm: async () => [...bare, ...withPhone] }));
+    expect(out.accepted.map((a) => a.draft.name).sort()).toEqual(["С телефоном 0", "С телефоном 1", "С телефоном 2"]);
+    expect(out.checked).toBe(3);
+  });
+
+  it("лимит ограничивает только загрузку сайтов", async () => {
+    const sites = Array.from({ length: 40 }, (_, i) =>
+      makeCandidate({ externalId: `s${i}`, name: `Сайт ${i}`, websiteRaw: `https://site${i}.ru`, phones: [`+7 495 100-00-${String(i).padStart(2, "0")}`], lat: 50 + i, lon: 30 })
+    );
+    const audit = vi.fn(async (url: string) => makeAudit({ url })); // все современные → отфильтруются
+    const out = await runLeadSearch(input({ requested: 5 }), deps({ yandex: async () => ({ items: sites }), audit }));
+    expect(audit).toHaveBeenCalledTimes(15); // 5 × 3
+    expect(out.accepted).toHaveLength(0);
+    expect(out.nextOffset).toBe(0); // непроверенные останутся для «Найти ещё»
+  });
+
+  it("OSM недоступен в режиме «только OSM» — понятный текст без технического мусора", async () => {
+    const err = (await runLeadSearch(
+      input({ osmOnly: true }),
+      deps({ yandexConfigured: false, osm: async () => Promise.reject(new Error("серверы OpenStreetMap не отвечают (a: HTTP 504)")) })
+    ).then(
+      () => null,
+      (e: unknown) => e
+    )) as Error;
+    expect(err).toBeInstanceOf(SearchFailedError);
+    expect(err.message).toContain("OpenStreetMap сейчас не отвечает");
+    expect(err.message).toContain("ключ Яндекса");
+  });
+
   it("отклонённые кандидаты попадают в список, чтобы «Найти ещё» их не перепроверял", async () => {
     const out = await runLeadSearch(input(), deps());
     expect(out.rejectedKeys).toEqual(expect.arrayContaining(["y:4", "y:5"]));

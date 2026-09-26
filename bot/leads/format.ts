@@ -299,6 +299,7 @@ export function summaryText(
 export function summaryKeyboard(s: Pick<LeadSearch, "id" | "found" | "requested" | "status">): InlineKeyboard {
   const kb = new InlineKeyboard();
   if (s.status === "RUNNING") return kb;
+  if (s.status === "FAILED") return kb.text("🔁 Повторить поиск", `ld:retry:${s.id}`);
   if (s.found > 0) kb.text("👀 Смотреть лиды", `ld:o:s:${s.id}:0`).row();
   kb.text(`🔄 Найти ещё ${s.requested}`, `ld:more:${s.id}`);
   return kb;
