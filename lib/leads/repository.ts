@@ -9,7 +9,7 @@ import { resolveNiche } from "./niches";
 import { buildOfferPlan, offerSummary } from "./offer";
 import { NO_REQUIREMENTS } from "./requirements";
 import { scoreLead } from "./scoring";
-import type { AcceptedLead, SearchOutcome } from "./search";
+import type { AcceptedLead, SearchOutcome, SearchProgress } from "./search";
 import type { LeadDraft, ScoreReason, SiteAudit, SocialLink, SourceRef, WebsiteKind } from "./types";
 
 // ---------- преобразования ----------
@@ -174,7 +174,7 @@ export async function saveSearchOutcome(params: {
 export async function createLeadSearch(data: {
   workspaceId: string;
   userId: string;
-  chatId: number;
+  chatId: number | null; // null — запуск из Mini App
   niche: string;
   city: string;
   requested: number;
@@ -187,7 +187,7 @@ export async function createLeadSearch(data: {
     data: {
       workspaceId: data.workspaceId,
       userId: data.userId,
-      chatId: BigInt(data.chatId),
+      chatId: data.chatId === null ? null : BigInt(data.chatId),
       niche: data.niche,
       city: data.city,
       requested: data.requested,
@@ -199,11 +199,20 @@ export async function createLeadSearch(data: {
   });
 }
 
+/** Промежуточный прогресс — приложение показывает его, опрашивая поиск. */
+export async function updateSearchProgress(searchId: string, p: SearchProgress) {
+  await prisma.leadSearch.updateMany({
+    where: { id: searchId, status: "RUNNING" },
+    data: { found: p.found, checked: p.checked, filtered: p.filtered, stage: p.stage || null, warnings: p.warnings },
+  });
+}
+
 export async function finishLeadSearch(searchId: string, outcome: SearchOutcome, found: number) {
   return prisma.leadSearch.update({
     where: { id: searchId },
     data: {
       status: "DONE",
+      stage: null,
       found,
       checked: outcome.checked,
       filtered: outcome.filtered,
@@ -218,7 +227,7 @@ export async function finishLeadSearch(searchId: string, outcome: SearchOutcome,
 export async function failLeadSearch(searchId: string, error: string, warnings: string[] = []) {
   return prisma.leadSearch.update({
     where: { id: searchId },
-    data: { status: "FAILED", error, warnings, finishedAt: new Date() },
+    data: { status: "FAILED", stage: null, error, warnings, finishedAt: new Date() },
   });
 }
 
@@ -262,26 +271,22 @@ export async function potentialBreakdown(searchId: string) {
 export type LeadFilter = "a" | "f" | "n" | "t" | "g" | "c" | "r" | "q";
 export const LEAD_FILTERS: LeadFilter[] = ["a", "f", "n", "t", "g", "c", "r", "q"];
 
+const FILTER_WHERE: Record<LeadFilter, Prisma.LeadWhereInput> = {
+  a: {},
+  f: { saved: true },
+  n: { status: "NEW" },
+  t: { status: "TO_CONTACT" },
+  g: { status: "NEGOTIATION" },
+  c: { status: "CLIENT" },
+  r: { status: { in: ["REJECTED", "NOT_FIT"] } },
+  q: {},
+};
+
+/** Фильтр по статусу + (необязательно) поиск по названию. */
 export function filterWhere(workspaceId: string, filter: LeadFilter, query?: string): Prisma.LeadWhereInput {
-  const base: Prisma.LeadWhereInput = { workspaceId };
-  switch (filter) {
-    case "f":
-      return { ...base, saved: true };
-    case "n":
-      return { ...base, status: "NEW" };
-    case "t":
-      return { ...base, status: "TO_CONTACT" };
-    case "g":
-      return { ...base, status: "NEGOTIATION" };
-    case "c":
-      return { ...base, status: "CLIENT" };
-    case "r":
-      return { ...base, status: { in: ["REJECTED", "NOT_FIT"] } };
-    case "q":
-      return query ? { ...base, name: { contains: query, mode: "insensitive" } } : base;
-    default:
-      return base;
-  }
+  const where: Prisma.LeadWhereInput = { workspaceId, ...FILTER_WHERE[filter] };
+  if (query) where.name = { contains: query, mode: "insensitive" };
+  return where;
 }
 
 const LIST_ORDER: Prisma.LeadOrderByWithRelationInput[] = [{ createdAt: "desc" }, { id: "desc" }];
@@ -289,7 +294,7 @@ const LIST_ORDER: Prisma.LeadOrderByWithRelationInput[] = [{ createdAt: "desc" }
 export async function listLeads(workspaceId: string, filter: LeadFilter, page: number, query?: string, pageSize = 8) {
   const where = filterWhere(workspaceId, filter, query);
   const [items, total] = await Promise.all([
-    prisma.lead.findMany({ where, orderBy: LIST_ORDER, skip: page * pageSize, take: pageSize }),
+    prisma.lead.findMany({ where, orderBy: LIST_ORDER, skip: page * pageSize, take: pageSize, include: TASK_LINKS }),
     prisma.lead.count({ where }),
   ]);
   return { items, total };
@@ -312,10 +317,29 @@ export async function nextLeadAfter(workspaceId: string, filter: LeadFilter, cur
 
 // ---------- действия с лидом ----------
 
+const TASK_LINKS = {
+  tasks: { orderBy: { createdAt: "desc" }, include: { task: { select: { id: true, title: true, createdAt: true } } } },
+} satisfies Prisma.LeadInclude;
+
 export async function getLead(leadId: string, workspaceId: string) {
-  return prisma.lead.findFirst({
-    where: { id: leadId, workspaceId },
-    include: { tasks: { orderBy: { createdAt: "desc" }, include: { task: { select: { id: true, title: true, createdAt: true } } } } },
+  return prisma.lead.findFirst({ where: { id: leadId, workspaceId }, include: TASK_LINKS });
+}
+
+/** Лиды поиска в порядке подборки. */
+export async function getSearchLeads(searchId: string, workspaceId: string) {
+  const rows = await prisma.leadSearchResult.findMany({
+    where: { searchId, search: { workspaceId } },
+    orderBy: { position: "asc" },
+    include: { lead: { include: TASK_LINKS } },
+  });
+  return rows.map((r) => r.lead);
+}
+
+/** Поиск, который идёт сейчас (из приложения, у партнёра или из бота). */
+export async function getActiveSearch(workspaceId: string) {
+  return prisma.leadSearch.findFirst({
+    where: { workspaceId, status: "RUNNING", createdAt: { gt: new Date(Date.now() - 15 * 60_000) } },
+    orderBy: { createdAt: "desc" },
   });
 }
 

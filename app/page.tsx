@@ -13,6 +13,7 @@ import { TaskDetailSheet } from "./components/TaskDetailSheet";
 import { Toasts } from "./components/Toasts";
 import { InviteScreen } from "./components/InviteScreen";
 import { DevBadge } from "./components/DevBadge";
+import { LeadsView } from "./components/leads/LeadsView";
 
 export default function Page() {
   return (
@@ -28,6 +29,7 @@ function Shell() {
   const [view, setView] = useState<ViewName>("home");
   const [newSheetOpen, setNewSheetOpen] = useState(false);
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
+  const [leadSearchOpen, setLeadSearchOpen] = useState(false);
 
   if (error) {
     return (
@@ -73,11 +75,13 @@ function Shell() {
       <main>
         {view === "home" && <HomeView onOpenTask={setOpenTaskId} />}
         {view === "tasks" && <TasksView onOpenTask={setOpenTaskId} />}
+        {view === "leads" && <LeadsView searchOpen={leadSearchOpen} onSearchOpenChange={setLeadSearchOpen} />}
         {view === "done" && <DoneView />}
         {view === "activity" && <ActivityView />}
       </main>
 
-      <Fab onClick={() => setNewSheetOpen(true)} />
+      {/* на вкладке «Клиенты» «+» запускает поиск клиентов, на остальных — новую задачу */}
+      <Fab onClick={() => (view === "leads" ? setLeadSearchOpen(true) : setNewSheetOpen(true))} />
       <BottomNav view={view} onChange={setView} />
 
       <NewTaskSheet open={newSheetOpen} onClose={() => setNewSheetOpen(false)} />

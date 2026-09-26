@@ -172,7 +172,7 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
           extra: d.extra ?? null,
           osmOnly,
         });
-        if (result === "busy") return "Поиск уже идёт — дождись результата";
+        if (result !== "started") return result === "busy" ? "Поиск уже идёт — дождись результата" : "Поиск клиентов пока не настроен";
         chatState.clear(c.chatId);
         await ctx
           .editMessageText(`🔎 Запустил поиск: <b>${e(d.niche)}</b> · <b>${e(d.city)}</b> · ${d.requested}${osmOnly ? " · только OSM" : ""}`, {
@@ -387,7 +387,7 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
       osmOnly: prev.osmOnly,
       parent: mode === "more" ? prev : undefined,
     });
-    if (result === "busy") return "Поиск уже идёт — дождись результата";
+    if (result !== "started") return result === "busy" ? "Поиск уже идёт — дождись результата" : "Поиск клиентов пока не настроен";
     return mode === "more" ? "Ищу ещё…" : "Повторяю поиск…";
   }
 

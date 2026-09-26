@@ -2,7 +2,7 @@
 
 import { haptic } from "@/lib/telegram-client";
 
-export type ViewName = "home" | "tasks" | "done" | "activity";
+export type ViewName = "home" | "tasks" | "leads" | "done" | "activity";
 
 export function BottomNav({ view, onChange }: { view: ViewName; onChange: (v: ViewName) => void }) {
   return (
@@ -15,6 +15,11 @@ export function BottomNav({ view, onChange }: { view: ViewName; onChange: (v: Vi
         <NavButton active={view === "tasks"} label="Задачи" onClick={() => onChange("tasks")}>
           <rect x="4" y="4" width="16" height="16" rx="4" />
           <path d="M8 12h8M8 16h5" />
+        </NavButton>
+        <NavButton active={view === "leads"} label="Клиенты" onClick={() => onChange("leads")}>
+          <circle cx="11" cy="11" r="6.5" />
+          <path d="m20 20-4.2-4.2" />
+          <path d="M8.5 11h5M11 8.5v5" />
         </NavButton>
         <NavButton active={view === "done"} label="Готово" onClick={() => onChange("done")}>
           <circle cx="12" cy="12" r="8.5" />

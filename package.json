@@ -13,7 +13,9 @@
     "prisma:studio": "prisma studio",
     "lint": "next lint",
     "test": "vitest run",
-    "test:e2e": "tsx scripts/leads-e2e.ts"
+    "test:e2e": "tsx scripts/leads-e2e.ts",
+    "test:api-e2e": "tsx scripts/leads-api-e2e.ts",
+    "dev:fake-sources": "tsx scripts/dev-fake-sources.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.658.1",

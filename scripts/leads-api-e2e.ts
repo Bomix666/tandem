@@ -1,0 +1,204 @@
+// Сквозная проверка API раздела «Клиенты» в Mini App (/api/leads/*).
+//
+// Вызывает настоящие обработчики маршрутов Next.js на отдельной тестовой БД
+// с поддельными источниками (scripts/lib/fake-sources.ts). Пользователи —
+// dev-режим авторизации (X-Dev-User-Id), двое в одном пространстве.
+//   E2E_DATABASE_URL=postgresql://postgres:tandem@localhost:5432/tandem_e2e npx tsx scripts/leads-api-e2e.ts
+
+import { execSync } from "node:child_process";
+import { fakeSourcesEnv, startFakeSourcesServer } from "./lib/fake-sources";
+
+const E2E_DB = process.env.E2E_DATABASE_URL ?? "postgresql://postgres:tandem@localhost:5432/tandem_e2e?schema=public";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Handler = (req: Request, ctx: { params: any }) => Promise<Response>;
+interface Res {
+  status: number;
+  json: any; // eslint-disable-line @typescript-eslint/no-explicit-any
+}
+
+const results: { name: string; ok: boolean; detail?: string }[] = [];
+function check(name: string, ok: boolean, detail?: unknown) {
+  results.push({ name, ok });
+  const d = detail === undefined ? "" : typeof detail === "string" ? detail : JSON.stringify(detail).slice(0, 400);
+  console.log(`${ok ? "✅" : "❌"} ${name}${!ok && d ? `\n     ${d}` : ""}`);
+}
+
+async function main() {
+  const dbName = new URL(E2E_DB).pathname.replace(/^\//, "");
+  if (!dbName.endsWith("_e2e")) throw new Error(`Тестовая БД должна оканчиваться на _e2e (сейчас «${dbName}»)`);
+  execSync("npx prisma migrate reset --force --skip-seed --skip-generate", { env: { ...process.env, DATABASE_URL: E2E_DB }, stdio: "ignore" });
+
+  const sources = await startFakeSourcesServer();
+  Object.assign(process.env, {
+    DATABASE_URL: E2E_DB,
+    NODE_ENV: "test",
+    ALLOW_DEV_AUTH: "true",
+    TELEGRAM_BOT_TOKEN: "123456:E2E-TEST-TOKEN",
+    ...fakeSourcesEnv(sources.port),
+  });
+
+  const { prisma } = await import("../lib/prisma");
+  const auth = await import("../app/api/auth/route");
+  const leads = await import("../app/api/leads/route");
+  const lead = await import("../app/api/leads/[id]/route");
+  const proposal = await import("../app/api/leads/[id]/proposal/route");
+  const task = await import("../app/api/leads/[id]/task/route");
+  const searches = await import("../app/api/leads/searches/route");
+  const search = await import("../app/api/leads/searches/[id]/route");
+  const meta = await import("../app/api/leads/meta/route");
+
+  async function call(handler: Handler, method: string, path: string, user: number, body?: unknown, params: Record<string, string> = {}): Promise<Res> {
+    const req = new Request(`http://localhost${path}`, {
+      method,
+      headers: { "x-dev-user-id": String(user), "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const res = await handler(req, { params });
+    return { status: res.status, json: await res.json().catch(() => null) };
+  }
+  async function waitDone(id: string, user = 1): Promise<Res> {
+    for (let i = 0; i < 200; i++) {
+      const r = await call(search.GET as Handler, "GET", `/api/leads/searches/${id}`, user, undefined, { id });
+      if (r.json?.search?.status !== "RUNNING") return r;
+      await new Promise((res) => setTimeout(res, 100));
+    }
+    throw new Error(`поиск ${id} не завершился`);
+  }
+
+  try {
+    // ===== пространство на двоих =====
+    const u1 = await call(auth.GET as Handler, "GET", "/api/auth", 1);
+    const token = u1.json.workspace.inviteToken;
+    await call(auth.POST as Handler, "POST", "/api/auth", 2, { token });
+    const ws = await prisma.workspace.findFirstOrThrow({ include: { members: true } });
+    check("подготовка: два участника в пространстве", ws.members.length === 2);
+
+    // ===== meta =====
+    let m = await call(meta.GET as Handler, "GET", "/api/leads/meta", 1);
+    check("meta: источники, пресеты, пустая статистика", m.status === 200 && m.json.yandex === true && m.json.niches.includes("Барбершопы") && m.json.stats.total === 0 && m.json.activeSearch === null, m.json);
+
+    // ===== запуск поиска =====
+    const bad = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "", city: "Москва", requested: 5 });
+    check("валидация: пустая ниша → 400", bad.status === 400);
+
+    const s1 = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Москва", requested: 5 });
+    check("POST /searches → 201, поиск идёт в фоне", s1.status === 201 && s1.json.search.status === "RUNNING", s1.json);
+    const busy = await call(searches.POST as Handler, "POST", "/api/leads/searches", 2, { niche: "Барбершопы", city: "Казань", requested: 5 });
+    check("второй поиск в пространстве, пока идёт первый → 409 busy", busy.status === 409 && busy.json.error === "busy", busy);
+    m = await call(meta.GET as Handler, "GET", "/api/leads/meta", 2);
+    check("партнёр видит идущий поиск (activeSearch)", m.json.activeSearch?.id === s1.json.search.id, m.json.activeSearch);
+
+    const d1 = await waitDone(s1.json.search.id);
+    check("поиск завершён: 5 лидов, разбивка 2/3/0", d1.json.search.status === "DONE" && d1.json.leads.length === 5 && d1.json.search.breakdown.high === 2 && d1.json.search.breakdown.medium === 3, d1.json.search);
+    const first = d1.json.leads[0];
+    check("лиды отсортированы: первый — Black Barber 95/100", first.name === "Black Barber" && first.score === 95, first);
+    check("DTO лида: сайт, контакты, соцсети, причины, источники", first.site.kind === "none" && first.emails[0] === "hello@blackbarber.ru" && first.socials[0].label === "Instagram" && first.reasons.length > 3 && first.sources.length === 2, first);
+    const insta = d1.json.leads.find((l: { name: string }) => l.name === "Insta Cuts");
+    check("нет email → пустой список (в интерфейсе «Не найден»)", insta && insta.emails.length === 0 && insta.site.kind === "social");
+
+    // ===== «Мои лиды» =====
+    let list = await call(leads.GET as Handler, "GET", "/api/leads?filter=a", 1);
+    check("GET /leads: все 5", list.json.total === 5);
+    list = await call(leads.GET as Handler, "GET", `/api/leads?filter=a&q=${encodeURIComponent("insta")}`, 1);
+    check("поиск по названию", list.json.total === 1 && list.json.leads[0].name === "Insta Cuts");
+
+    // ===== статус, сохранение =====
+    const p1 = await call(lead.PATCH as Handler, "PATCH", `/api/leads/${insta.id}`, 1, { status: "NEGOTIATION", saved: true }, { id: insta.id });
+    check("PATCH статус + сохранение", p1.status === 200 && p1.json.lead.status === "NEGOTIATION" && p1.json.lead.saved === true);
+    const badStatus = await call(lead.PATCH as Handler, "PATCH", `/api/leads/${insta.id}`, 1, { status: "WHATEVER" }, { id: insta.id });
+    check("неизвестный статус → 400", badStatus.status === 400);
+    list = await call(leads.GET as Handler, "GET", "/api/leads?filter=g&q=inst", 1);
+    check("фильтр «Переговоры» вместе с поиском по названию", list.json.total === 1);
+    list = await call(leads.GET as Handler, "GET", "/api/leads?filter=f", 1);
+    check("фильтр «Сохранённые»", list.json.total === 1);
+    const seen = await call(lead.GET as Handler, "GET", `/api/leads/${insta.id}`, 2, undefined, { id: insta.id });
+    check("партнёр видит те же лиды и статусы", seen.json.lead.status === "NEGOTIATION");
+
+    // ===== предложение =====
+    const pr = await call(proposal.POST as Handler, "POST", `/api/leads/${insta.id}/proposal`, 1, undefined, { id: insta.id });
+    check("✨ предложение по фактам", pr.status === 200 && pr.json.text.startsWith("Здравствуйте!") && pr.json.text.includes("Instagram") && !pr.json.text.includes("@"), pr.json);
+    check("предложение сохранено в лиде", (await prisma.lead.findUnique({ where: { id: insta.id } }))?.proposal === pr.json.text);
+
+    // ===== задача из лида =====
+    const t1 = await call(task.POST as Handler, "POST", `/api/leads/${insta.id}/task`, 1, {}, { id: insta.id });
+    check("➕ задача создана", t1.status === 201 && t1.json.task.title === "Связаться с Insta Cuts — предложить сайт", t1.json);
+    const t2 = await call(task.POST as Handler, "POST", `/api/leads/${insta.id}/task`, 1, {}, { id: insta.id });
+    check("повторно — «уже есть», без новой задачи", t2.json.status === "exists" && (await prisma.leadTask.count({ where: { leadId: insta.id } })) === 1);
+    const t3 = await call(task.POST as Handler, "POST", `/api/leads/${insta.id}/task`, 1, { force: true }, { id: insta.id });
+    check("с подтверждением — вторая задача", t3.status === 201 && (await prisma.leadTask.count({ where: { leadId: insta.id } })) === 2);
+    const taskRow = await prisma.task.findUniqueOrThrow({ where: { id: t1.json.task.id } });
+    check("задача в общем списке задач, с данными лида", taskRow.workspaceId === ws.id && !!taskRow.description?.includes("Тип: Продажа сайта"));
+    check("партнёру ушло уведомление о новой задаче", (await prisma.notification.count({ where: { type: "friend_created_task" } })) === 2);
+
+    // ===== найти ещё / дубли =====
+    const more = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { fromSearchId: s1.json.search.id, mode: "more" });
+    const d2 = await waitDone(more.json.search.id);
+    const firstNames = new Set(d1.json.leads.map((l: { name: string }) => l.name));
+    check(
+      "«Найти ещё»: только новые бизнесы",
+      d2.json.leads.length === 4 && d2.json.leads.every((l: { name: string }) => !firstNames.has(l.name)),
+      d2.json.leads.map((l: { name: string }) => l.name)
+    );
+    const again = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Москва", requested: 5 });
+    const d3 = await waitDone(again.json.search.id);
+    check("повторный поиск: дубли не создаются", (await prisma.lead.count()) === 9 && d3.json.search.breakdown.existing === 5, d3.json.search);
+
+    // ===== отказы источников =====
+    sources.state.osmMode = "500";
+    const s4 = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Казань", requested: 5 });
+    const d4 = await waitDone(s4.json.search.id);
+    check("OSM недоступен → предупреждение, поиск продолжился", d4.json.search.status === "DONE" && d4.json.search.warnings.join().includes("OpenStreetMap") && d4.json.leads.length === 2, d4.json.search);
+    sources.state.osmMode = "ok";
+
+    process.env.YANDEX_PLACES_API_KEY = "";
+    const nc = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Москва", requested: 5 });
+    check("без ключа Яндекса → 400 not_configured", nc.status === 400 && nc.json.error === "not_configured");
+    m = await call(meta.GET as Handler, "GET", "/api/leads/meta", 1);
+    check("meta сообщает, что Яндекс не подключён", m.json.yandex === false);
+
+    sources.state.osmMode = "500";
+    const s5 = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Москва", requested: 5, osmOnly: true });
+    const d5 = await waitDone(s5.json.search.id);
+    check("только OSM, OSM лежит → понятная ошибка", d5.json.search.status === "FAILED" && d5.json.search.error.includes("OpenStreetMap сейчас не отвечает"), d5.json.search);
+    sources.state.osmMode = "ok";
+    const retry = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { fromSearchId: s5.json.search.id, mode: "retry" });
+    const d6 = await waitDone(retry.json.search.id);
+    check("«Повторить» после восстановления OSM → поиск прошёл", d6.json.search.status === "DONE" && d6.json.search.parentId === null, d6.json.search);
+    process.env.YANDEX_PLACES_API_KEY = fakeSourcesEnv(sources.port).YANDEX_PLACES_API_KEY!;
+
+    // ===== история, статистика =====
+    const hist = await call(searches.GET as Handler, "GET", "/api/leads/searches", 2);
+    check("история поиска", hist.json.total === 6 && hist.json.searches[0].id === retry.json.search.id, hist.json.total);
+    const avg = await call(meta.PATCH as Handler, "PATCH", "/api/leads/meta", 1, { avgCheck: 75000 });
+    check("средний чек сохраняется", avg.json.stats.avgCheck === 75000);
+    check("статистика по статусам", avg.json.stats.total === 11 /* 5 + 4 «ещё» + 2 Казань */ && avg.json.stats.byStatus.NEGOTIATION === 1 && avg.json.stats.saved === 1, avg.json.stats);
+
+    // ===== доступ =====
+    const stranger = await call(leads.GET as Handler, "GET", "/api/leads", 3);
+    check("пользователь без пространства → 404", stranger.status === 404);
+    const noAuth = await leads.GET(new Request("http://localhost/api/leads"));
+    process.env.ALLOW_DEV_AUTH = "false";
+    const noAuth2 = await leads.GET(new Request("http://localhost/api/leads"));
+    process.env.ALLOW_DEV_AUTH = "true";
+    check("без авторизации Telegram → 401", noAuth2.status === 401, noAuth.status);
+    const other = await prisma.workspace.create({ data: {} });
+    const foreign = await prisma.lead.create({ data: { workspaceId: other.id, name: "Чужой", normName: "чужой", city: "Москва", niche: "x", sources: [] } });
+    const f = await call(lead.GET as Handler, "GET", `/api/leads/${foreign.id}`, 1, undefined, { id: foreign.id });
+    check("чужой лид из другого пространства → 404", f.status === 404);
+  } catch (err) {
+    check("сценарий выполнен без исключений", false, (err as Error).stack ?? String(err));
+  } finally {
+    await sources.close();
+    await prisma.$disconnect();
+  }
+
+  const failed = results.filter((r) => !r.ok);
+  console.log(`\nИтого: ${results.length - failed.length}/${results.length} проверок пройдено`);
+  process.exit(failed.length ? 1 : 0);
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

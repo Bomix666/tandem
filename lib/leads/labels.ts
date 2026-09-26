@@ -1,7 +1,21 @@
 // Подписи статусов и потенциала — общие для бота и описаний задач.
 
 import type { LeadStatus } from "@prisma/client";
-import type { Potential, ScoreReason } from "./types";
+import type { Potential, ScoreReason, SiteAudit } from "./types";
+
+/** Проблемы сайта, найденные проверкой, — короткими фразами для карточки. */
+export function siteIssues(audit: SiteAudit | null | undefined, now = new Date()): string[] {
+  if (!audit || audit.status !== "ok") return [];
+  const issues: string[] = [];
+  if (!audit.hasViewport) issues.push("нет адаптации под телефон");
+  if (!audit.hasForm && !audit.bookingWidget) issues.push("нет формы заявки");
+  if (!audit.https) issues.push("без HTTPS");
+  if (audit.copyrightYear && audit.copyrightYear <= now.getFullYear() - 3) issues.push(`© ${audit.copyrightYear}`);
+  if (audit.outdated?.length) issues.push("устаревшая вёрстка");
+  return issues;
+}
+
+export const SOURCE_LABELS: Record<string, string> = { yandex: "Яндекс Карты", osm: "OpenStreetMap" };
 
 export const LEAD_STATUS_ORDER: LeadStatus[] = [
   "NEW",

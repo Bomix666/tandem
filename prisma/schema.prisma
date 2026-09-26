@@ -339,6 +339,7 @@ model LeadSearch {
   found       Int              @default(0)
   checked     Int              @default(0)
   filtered    Int              @default(0)
+  stage       String? // что делается сейчас («Проверяю сайты…») — для прогресса в приложении
   nextOffset  Int              @default(0) // смещение в выдаче источника для «Найти ещё»
   warnings    Json? // ["Не удалось получить данные из OSM", ...]
   rejectedKeys Json? // отклонённые кандидаты — «Найти ещё» их не перепроверяет

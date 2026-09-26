@@ -16,6 +16,7 @@ declare global {
           notificationOccurred: (type: "error" | "success" | "warning") => void;
         };
         openTelegramLink?: (url: string) => void;
+        openLink?: (url: string) => void;
         close: () => void;
       };
     };
@@ -88,6 +89,18 @@ export function openTelegramLink(url: string) {
   const tg = window.Telegram?.WebApp;
   if (tg?.openTelegramLink) tg.openTelegramLink(url);
   else window.open(url, "_blank");
+}
+
+/**
+ * Внешняя ссылка (сайт бизнеса, Instagram, карточка на Яндекс Картах):
+ * внутри Mini App — через Telegram (иначе ссылка откроется внутри webview
+ * и закроет приложение), t.me-ссылки — нативно, вне Telegram — новой вкладкой.
+ */
+export function openExternalLink(url: string) {
+  const tg = window.Telegram?.WebApp;
+  if (/^https?:\/\/(t\.me|telegram\.me)\//i.test(url) && tg?.openTelegramLink) tg.openTelegramLink(url);
+  else if (tg?.openLink && tg.initData) tg.openLink(url);
+  else window.open(url, "_blank", "noopener");
 }
 
 export function haptic(style: "light" | "medium" | "heavy" = "light") {

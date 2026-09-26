@@ -16,6 +16,8 @@ import {
   LEAD_STATUS_ORDER,
   POTENTIAL_EMOJI,
   POTENTIAL_LABELS,
+  siteIssues,
+  SOURCE_LABELS,
   statusText,
 } from "../../lib/leads/labels";
 import { CITY_PRESETS, NICHE_PRESETS } from "../../lib/leads/niches";
@@ -84,12 +86,7 @@ function siteLine(lead: LeadWithTasks): string {
     if (!audit) return `${link} — не проверялся`;
     if (audit.status === "blocked") return `${link} — не удалось проверить${audit.error ? ` (${e(audit.error)})` : ""}`;
     if (audit.status !== "ok") return `${link} — ⚠️ не открывается`;
-    const issues: string[] = [];
-    if (!audit.hasViewport) issues.push("нет адаптации под телефон");
-    if (!audit.hasForm && !audit.bookingWidget) issues.push("нет формы заявки");
-    if (!audit.https) issues.push("без HTTPS");
-    if (audit.copyrightYear && audit.copyrightYear <= new Date().getFullYear() - 3) issues.push(`© ${audit.copyrightYear}`);
-    if (audit.outdated?.length) issues.push("устаревшая вёрстка");
+    const issues = siteIssues(audit);
     return issues.length ? `${link} — ⚠️ ${issues.join(", ")}` : `${link} — ✅ выглядит современным`;
   }
   if (lead.websiteKind === "booking" && booking) {
@@ -98,8 +95,6 @@ function siteLine(lead: LeadWithTasks): string {
   if (lead.websiteKind === "social") return "❌ Не найден (вместо сайта — соцсеть)";
   return "❌ Не найден";
 }
-
-const SOURCE_LABELS: Record<string, string> = { yandex: "Яндекс Карты", osm: "OpenStreetMap" };
 
 export function renderLeadCard(lead: LeadWithTasks, opts: { number?: number } = {}): string {
   const socials = (lead.socials as unknown as SocialLink[] | null) ?? [];

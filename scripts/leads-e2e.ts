@@ -13,59 +13,17 @@ import { execSync, spawn, type ChildProcess } from "node:child_process";
 import http from "node:http";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
+import { fakeSourcesEnv, handleFakeSource, startAltSiteServer, type FakeSourcesState } from "./lib/fake-sources";
 
 const E2E_DB = process.env.E2E_DATABASE_URL ?? "postgresql://postgres:tandem@localhost:5432/tandem_e2e?schema=public";
 const TOKEN = "123456:E2E-TEST-TOKEN";
 const USER1 = 5550001;
 const USER2 = 5550002;
-const YANDEX_KEY = "e2e-yandex-key";
 
-// ---------------- фейковые данные ----------------
-
-interface FakeOrg {
-  id: string;
-  name: string;
-  addr: string;
-  ll: [number, number];
-  phones: string[];
-  url?: string;
-  hours?: string;
-}
+// ---------------- поддельные источники (scripts/lib/fake-sources.ts) ----------------
 
 let port = 0;
-// разные хосты — как у настоящих разных бизнесов (иначе защита от дублей справедливо склеит их по домену)
-const site = (p: string, host = "127.0.0.1") => `http://${host}:${port}/site/${p}`;
-
-const moscow = (): FakeOrg[] => [
-  { id: "m1", name: "Black Barber", addr: "Россия, Москва, Тверская улица, 7", ll: [37.61, 55.76], phones: ["+7 (495) 111-11-01"], hours: "ежедневно, 10:00–22:00" },
-  { id: "m2", name: "Barber Chain", addr: "Россия, Москва, улица Арбат, 1", ll: [37.59, 55.75], phones: ["+7 (495) 111-11-02"] },
-  { id: "m3", name: "Barber Chain", addr: "Россия, Москва, улица Покровка, 2", ll: [37.64, 55.758], phones: ["+7 (495) 111-11-03"] },
-  { id: "m4", name: "Barber Chain", addr: "Россия, Москва, Мясницкая улица, 3", ll: [37.635, 55.765], phones: ["+7 (495) 111-11-04"] },
-  { id: "m5", name: "Ghost Barber", addr: "Россия, Москва, улица Сретенка, 5", ll: [37.63, 55.77], phones: [] },
-  { id: "m6", name: "Insta Cuts", addr: "Россия, Москва, Пятницкая улица, 6", ll: [37.628, 55.74], phones: ["+7 (495) 111-11-06"], url: "https://instagram.com/instacuts" },
-  { id: "m7", name: "Yclients Barber", addr: "Россия, Москва, Никольская улица, 7", ll: [37.622, 55.757], phones: ["+7 (495) 111-11-07"], url: "https://n1.yclients.com/company/7" },
-  { id: "m8", name: "Old School Barber", addr: "Россия, Москва, Малая Бронная улица, 8", ll: [37.6, 55.762], phones: ["+7 (495) 111-11-08"], url: site("old") },
-  { id: "m9", name: "Modern Barber", addr: "Россия, Москва, Садовая улица, 9", ll: [37.62, 55.77], phones: ["+7 (495) 111-11-09"], url: site("modern", "localhost") },
-  { id: "m10", name: "Down Barber", addr: "Россия, Москва, Лесная улица, 10", ll: [37.59, 55.78], phones: ["+7 (495) 111-11-10"], url: "http://127.0.0.2:1/" },
-];
-const kazan = (): FakeOrg[] => [
-  { id: "k1", name: "Казань Барбер", addr: "Россия, Казань, улица Баумана, 1", ll: [49.12, 55.79], phones: ["+7 (843) 222-22-01"] },
-  { id: "k2", name: "Kazan Cuts", addr: "Россия, Казань, Кремлёвская улица, 2", ll: [49.11, 55.8], phones: ["+7 (843) 222-22-02"], url: "vk.com/kazancuts" },
-];
-
-const OVERPASS = {
-  elements: [
-    { type: "node", id: 1, lat: 55.7601, lon: 37.6101, tags: { name: "Black Barber", shop: "hairdresser", "contact:instagram": "blackbarber", "contact:email": "hello@blackbarber.ru" } },
-    { type: "node", id: 2, lat: 55.7621, lon: 37.6001, tags: { name: "Old School Barber", shop: "hairdresser", "contact:vk": "oldschool", phone: "+7 495 111-11-08" } },
-  ],
-};
-
-const OLD_SITE = `<html><head><script src="//s1.ucoz.net/x.js"></script></head><body><font>Барбершоп</font><font>Услуги</font><font>Цены</font>
-<a href="mailto:oldschoolbarber@gmail.com">Почта</a><a href="tel:+74951111108">Звоните</a><p>© 2014 Old School</p></body></html>`;
-const MODERN_SITE = `<html><head><meta name="viewport" content="width=device-width"></head><body><form><input type="tel" name="phone"><button>Записаться</button></form>
-<a href="https://t.me/modernbarber">Telegram</a><footer>© 2020–2026</footer></body></html>`;
-
-const state = { yandexMode: "ok" as "ok" | "403", osmMode: "ok" as "ok" | "500" };
+const state: FakeSourcesState = { yandexMode: "ok", osmMode: "ok" };
 
 // ---------------- фейковый Telegram ----------------
 
@@ -144,30 +102,6 @@ async function telegram(method: string, body: Record<string, unknown>): Promise<
 
 // ---------------- HTTP-сервер: Telegram, Яндекс, OSM, сайты ----------------
 
-function yandexResponse(text: string, skip: number) {
-  const orgs = text.includes("Казань") ? kazan() : text.includes("Москва") ? moscow() : [];
-  return {
-    type: "FeatureCollection",
-    properties: { ResponseMetaData: { SearchResponse: { found: orgs.length } } },
-    features: orgs.slice(skip, skip + 50).map((o) => ({
-      type: "Feature",
-      geometry: { type: "Point", coordinates: o.ll },
-      properties: {
-        name: o.name,
-        CompanyMetaData: {
-          id: o.id,
-          name: o.name,
-          address: o.addr,
-          url: o.url,
-          Phones: o.phones.map((p) => ({ type: "phone", formatted: p })),
-          Categories: [{ class: "beauty", name: "Барбершоп" }],
-          Hours: o.hours ? { text: o.hours } : undefined,
-        },
-      },
-    })),
-  };
-}
-
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const chunks: Buffer[] = [];
@@ -188,17 +122,7 @@ const server = http.createServer(async (req, res) => {
     }
     return;
   }
-  if (url.pathname.startsWith("/yandex/")) {
-    if (state.yandexMode === "403" || url.searchParams.get("apikey") !== YANDEX_KEY) return json(403, { message: "Invalid key" });
-    return json(200, yandexResponse(url.searchParams.get("text") ?? "", Number(url.searchParams.get("skip") ?? 0)));
-  }
-  if (url.pathname === "/nominatim/search") return json(200, [{ boundingbox: ["55.1", "56.1", "36.8", "38.0"] }]);
-  if (url.pathname === "/overpass") return state.osmMode === "500" ? json(500, { error: "overloaded" }) : json(200, OVERPASS);
-  if (url.pathname === "/site/old" || url.pathname === "/site/modern") {
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(url.pathname === "/site/old" ? OLD_SITE : MODERN_SITE);
-    return;
-  }
+  if (handleFakeSource(url, res, port, state)) return;
   res.writeHead(404).end();
 });
 
@@ -215,12 +139,7 @@ function startBot(withYandex: boolean) {
     TELEGRAM_BOT_TOKEN: TOKEN,
     TELEGRAM_WEBAPP_URL: "https://example.test",
     TELEGRAM_API_ROOT: `http://127.0.0.1:${port}`,
-    YANDEX_PLACES_API_KEY: withYandex ? YANDEX_KEY : "",
-    YANDEX_PLACES_API_URL: `http://127.0.0.1:${port}/yandex/v1/`,
-    OVERPASS_API_URL: `http://127.0.0.1:${port}/overpass`,
-    NOMINATIM_URL: `http://127.0.0.1:${port}/nominatim`,
-    LEADS_ALLOW_PRIVATE_URLS: "true",
-    LEADS_OSM_ENABLED: "true",
+    ...fakeSourcesEnv(port, withYandex),
   };
   const cli = path.join("node_modules", "tsx", "dist", "cli.mjs");
   bot = spawn(process.execPath, [cli, "bot/index.ts"], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -341,6 +260,7 @@ async function main() {
 
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   port = (server.address() as AddressInfo).port;
+  const altSites = await startAltSiteServer(state);
   startBot(true);
   await waitFor("бот запустился", () => calls.some((c) => c.method === "getMe"));
 
@@ -578,6 +498,7 @@ async function main() {
   } finally {
     await stopBot();
     server.close();
+    await altSites.close();
     await prisma.$disconnect();
   }
 

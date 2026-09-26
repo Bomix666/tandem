@@ -6,7 +6,7 @@
 // сигнатурой (publish/subscribe) — вызовы в API-роутах менять не придётся.
 
 export interface RealtimeEvent {
-  type: "tasks_changed" | "presence_changed" | "activity_changed" | "comments_changed";
+  type: "tasks_changed" | "presence_changed" | "activity_changed" | "comments_changed" | "leads_changed";
   workspaceId: string;
   payload?: unknown;
 }
