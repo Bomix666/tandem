@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveNiche } from "../niches";
 import { buildOverpassQuery, parseOverpass } from "../providers/osm";
-import { parseYandexResponse } from "../providers/yandex";
+import { parseYandexResponse, ProviderError, searchYandex } from "../providers/yandex";
 
 describe("parseYandexResponse", () => {
   it("разбирает организации по документированному формату", () => {
@@ -130,5 +130,58 @@ describe("resolveNiche", () => {
     expect(resolveNiche("Барбершопы").key).toBe("barbershop");
     expect(resolveNiche("стоматологии").key).toBe("dentistry");
     expect(resolveNiche("Автомойки").key).toBe("custom");
+  });
+});
+
+describe("searchYandex: повторы при сбоях", () => {
+  const ok = { features: [{ geometry: { coordinates: [37.6, 55.7] }, properties: { CompanyMetaData: { id: "1", name: "Бизнес" } } }] };
+  const reply = (status: number, body: unknown) => new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
+
+  beforeEach(() => {
+    process.env.YANDEX_PLACES_API_KEY = "test-key";
+    process.env.YANDEX_RETRY_DELAY_MS = "0";
+    vi.spyOn(console, "error").mockImplementation(() => void 0);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    delete process.env.YANDEX_PLACES_API_KEY;
+    delete process.env.YANDEX_RETRY_DELAY_MS;
+  });
+
+  it("разовый 403 не роняет поиск: второй запрос проходит", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(reply(403, "Invalid api key")).mockResolvedValueOnce(reply(200, ok));
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await searchYandex({ text: "кафе Москва", skip: 0 });
+    expect(res.items.map((i) => i.name)).toEqual(["Бизнес"]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("постоянный 403 → ошибка с ответом Яндекса (после 3 попыток)", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => reply(403, "Invalid api key"));
+    vi.stubGlobal("fetch", fetchMock);
+    const err = (await searchYandex({ text: "x", skip: 0 }).then(
+      () => null,
+      (e: unknown) => e
+    )) as ProviderError;
+    expect(err).toBeInstanceOf(ProviderError);
+    expect(err.message).toContain("Яндекс отклонил ключ");
+    expect(err.message).toContain("Invalid api key");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("ошибка клиента (400) не повторяется", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => reply(400, "Bad request"));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(searchYandex({ text: "x", skip: 0 })).rejects.toBeInstanceOf(ProviderError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ключ не задан — сразу понятная ошибка, без запросов", async () => {
+    delete process.env.YANDEX_PLACES_API_KEY;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(searchYandex({ text: "x", skip: 0 })).rejects.toThrow("не настроен");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

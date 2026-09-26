@@ -74,6 +74,7 @@ export async function fetchPublicPage(
   for (let hop = 0; hop < 6; hop++) {
     await assertPublicUrl(url, opts.allowPrivate);
     const res = await fetch(url, {
+      cache: "no-store",
       redirect: "manual",
       signal,
       headers: { "User-Agent": opts.userAgent, Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5" },
@@ -129,7 +130,8 @@ export function decodeHtml(body: Buffer, contentType: string): string {
 /** JSON-запрос к API с таймаутом; при ошибке HTTP — HttpError со статусом. */
 export async function fetchJson<T>(url: string, init: RequestInit & { timeoutMs: number }): Promise<T> {
   const { timeoutMs, ...rest } = init;
-  const res = await fetch(url, { ...rest, signal: AbortSignal.timeout(timeoutMs) });
+  // no-store: серверный fetch Next.js кэширует ответы — результаты поиска не должны застревать в кэше
+  const res = await fetch(url, { cache: "no-store", ...rest, signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new HttpError(`HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ""}`, res.status);

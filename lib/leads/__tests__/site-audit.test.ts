@@ -37,6 +37,11 @@ describe("analyzeHtml", () => {
     expect(r.phones).toEqual(["74951112233"]);
   });
 
+  it("email из mailto: с закодированным пробелом очищается (%20info@ → info@)", () => {
+    const r = analyzeHtml('<a href="mailto:%20info@clinic.ru">Написать</a> <a href="mailto:  sales@clinic.ru">ещё</a>', "https://clinic.ru/", NOW);
+    expect(r.emails).toEqual(["info@clinic.ru", "sales@clinic.ru"]);
+  });
+
   it("современный сайт: адаптив, HTTPS, форма, призыв, свежий год", () => {
     const r = analyzeHtml(MODERN_SITE, "https://modernbarber.ru/", NOW);
     expect(r).toMatchObject({ hasViewport: true, https: true, hasForm: true, hasCta: true, copyrightYear: 2026, platform: "Tilda" });

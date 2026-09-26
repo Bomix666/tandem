@@ -7,6 +7,11 @@ export const leadsConfig = {
   get yandexApiKey(): string | null {
     return process.env.YANDEX_PLACES_API_KEY?.trim() || null;
   },
+  /** Пауза между повторами запроса к Яндексу (мс; умножается на номер попытки). */
+  get yandexRetryDelayMs(): number {
+    const n = Number(process.env.YANDEX_RETRY_DELAY_MS);
+    return Number.isFinite(n) && n >= 0 && process.env.YANDEX_RETRY_DELAY_MS !== undefined && process.env.YANDEX_RETRY_DELAY_MS !== "" ? n : 1500;
+  },
   get yandexApiUrl(): string {
     return process.env.YANDEX_PLACES_API_URL?.trim() || "https://search-maps.yandex.ru/v1/";
   },

@@ -95,7 +95,8 @@ export function findCopyrightYear(text: string, now = new Date()): number | null
 function extractEmails(html: string, siteDomain: string): string[] {
   const found = html.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi) ?? [];
   const emails = found
-    .map((e) => e.toLowerCase().replace(/^mailto:/, ""))
+    // в ссылках mailto: бывает закодированный пробел (%20info@…) — убираем такие хвосты у имени ящика
+    .map((e) => e.toLowerCase().replace(/^mailto:/, "").replace(/^(?:%[0-9a-f]{2})+/, "").replace(/^[^a-z0-9]+/, ""))
     .filter((e) => !/\.(png|jpe?g|gif|webp|svg|css|js)$/.test(e))
     .filter((e) => {
       const domain = e.split("@")[1] ?? "";

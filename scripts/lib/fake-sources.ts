@@ -130,6 +130,7 @@ export function fakeSourcesEnv(port: number, withYandex = true): Record<string, 
     YANDEX_PLACES_API_URL: `http://127.0.0.1:${port}/yandex/v1/`,
     OVERPASS_API_URL: `http://127.0.0.1:${port}/overpass`,
     NOMINATIM_URL: `http://127.0.0.1:${port}/nominatim`,
+    YANDEX_RETRY_DELAY_MS: "0", // в тестах повторы без пауз
     LEADS_ALLOW_PRIVATE_URLS: "true",
     LEADS_OSM_ENABLED: "true",
   };

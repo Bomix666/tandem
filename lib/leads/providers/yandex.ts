@@ -80,17 +80,31 @@ export async function searchYandex(params: { text: string; skip: number; results
   url.searchParams.set("results", String(params.results ?? YANDEX_PAGE_SIZE));
   url.searchParams.set("skip", String(params.skip));
 
-  try {
-    const json = await fetchJson<YandexResponse>(url.toString(), { timeoutMs: 15_000 });
-    return parseYandexResponse(json);
-  } catch (err) {
-    if (err instanceof HttpError && (err.status === 401 || err.status === 403)) {
-      throw new ProviderError("ключ Яндекса недействителен или не подключён к «API Поиска по организациям»", "yandex");
+  // Яндекс изредка отвечает 403 «Invalid api key» на рабочий ключ (особенно в первые часы после его
+  // активации: ключ ещё расходится по серверам) — поэтому отказ ключа, лимит и сбои сети пробуем повторить.
+  const attempts = 3;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const json = await fetchJson<YandexResponse>(url.toString(), { timeoutMs: 15_000 });
+      return parseYandexResponse(json);
+    } catch (err) {
+      lastError = err;
+      const status = err instanceof HttpError ? err.status : null;
+      const retryable = status === null || status === 401 || status === 403 || status === 429 || status >= 500;
+      console.error(`Yandex search failed (attempt ${attempt}/${attempts}): ${(err as Error).message}`);
+      if (!retryable || attempt === attempts) break;
+      await new Promise((r) => setTimeout(r, leadsConfig.yandexRetryDelayMs * attempt));
     }
-    if (err instanceof HttpError && err.status === 429) {
-      throw new ProviderError("исчерпан лимит запросов к Яндексу", "yandex");
-    }
-    const e = err as Error;
-    throw new ProviderError(e.name === "TimeoutError" ? "Яндекс не ответил вовремя" : `ошибка Яндекса: ${e.message}`, "yandex");
   }
+
+  if (lastError instanceof HttpError && (lastError.status === 401 || lastError.status === 403)) {
+    const detail = lastError.message.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    throw new ProviderError(`Яндекс отклонил ключ — он недействителен или не подключён к «API Поиска по организациям» (${detail})`, "yandex");
+  }
+  if (lastError instanceof HttpError && lastError.status === 429) {
+    throw new ProviderError("исчерпан лимит запросов к Яндексу", "yandex");
+  }
+  const e = lastError as Error;
+  throw new ProviderError(e.name === "TimeoutError" ? "Яндекс не ответил вовремя" : `ошибка Яндекса: ${e.message}`, "yandex");
 }
