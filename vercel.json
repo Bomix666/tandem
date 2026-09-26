@@ -1,0 +1,5 @@
+{
+  "crons": [
+    { "path": "/api/notifications/cron?secret=REPLACE_WITH_YOUR_CRON_SECRET", "schedule": "* * * * *" }
+  ]
+}

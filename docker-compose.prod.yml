@@ -1,0 +1,31 @@
+# Для постоянного деплоя на VPS со своим доменом — Caddy сам получает и
+# продлевает TLS-сертификат (Let's Encrypt), ничего вручную настраивать
+# не нужно, кроме домена, указывающего A-записью на IP сервера.
+#
+# Порт 3000 в базовом docker-compose.yml остаётся опубликован напрямую —
+# для личного проекта это не проблема, но если хочешь закрыть прямой
+# доступ мимо Caddy, замени "3000:3000" на "127.0.0.1:3000:3000" в
+# docker-compose.yml.
+#
+# Использование:
+#   1. Впиши свой домен в Caddyfile вместо example.com
+#   2. docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#   3. TELEGRAM_WEBAPP_URL и APP_URL в .env — https://your-domain.com
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

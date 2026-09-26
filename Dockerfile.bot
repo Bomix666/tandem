@@ -1,0 +1,16 @@
+# syntax=docker/dockerfile:1
+
+FROM node:20-alpine
+WORKDIR /app
+RUN apk add --no-cache openssl libc6-compat
+
+COPY package.json package-lock.json* ./
+# --ignore-scripts: postinstall (prisma generate) здесь упадёт — schema.prisma
+# ещё не скопирована; prisma generate выполняется явно ниже, после COPY . .
+RUN npm ci --ignore-scripts
+
+COPY . .
+ENV DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/placeholder"
+RUN npx prisma generate
+
+CMD ["npx", "tsx", "bot/index.ts"]

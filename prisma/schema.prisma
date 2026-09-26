@@ -1,0 +1,228 @@
+// Tandem — data model
+// Two-person shared task workspace for a Telegram Mini App.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum PresenceStatus {
+  ONLINE
+  AWAY
+  OFFLINE
+  WORKING
+}
+
+enum RecurrenceFrequency {
+  NEVER
+  DAILY
+  WEEKDAYS
+  WEEKLY
+  MONTHLY
+  CUSTOM
+}
+
+model User {
+  id           String   @id @default(cuid())
+  telegramId   BigInt   @unique
+  username     String?
+  firstName    String
+  lastName     String?
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  lastSeenAt   DateTime @default(now())
+
+  memberships       WorkspaceMember[]
+  createdTasks      Task[]              @relation("TaskCreator")
+  assignedTasks     Task[]              @relation("TaskAssignee")
+  comments          TaskComment[]
+  attachments       TaskAttachment[]
+  activity          TaskActivity[]
+  presence          Presence?
+  notificationPrefs NotificationPreference?
+  notifications     Notification[]
+}
+
+// Enforced at the application layer: max 2 members per workspace.
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String   @default("Tandem")
+  inviteToken String? @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members     WorkspaceMember[]
+  tasks       Task[]
+  recurrences RecurringTask[]
+}
+
+model WorkspaceMember {
+  id          String    @id @default(cuid())
+  workspaceId String
+  userId      String
+  joinedAt    DateTime  @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@unique([userId]) // a user belongs to exactly one workspace in this product
+}
+
+model Task {
+  id           String     @id @default(cuid())
+  workspaceId  String
+  creatorId    String
+  assigneeId   String
+  title        String
+  description  String?
+  status       TaskStatus @default(TODO)
+  progress     Int        @default(0) // 0-100
+  priority     Priority   @default(MEDIUM)
+  deadlineAt   DateTime
+  sortOrder    Int        @default(0)
+  recurrenceId String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  creator     User            @relation("TaskCreator", fields: [creatorId], references: [id])
+  assignee    User            @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  recurrence  RecurringTask?  @relation(fields: [recurrenceId], references: [id])
+  comments    TaskComment[]
+  attachments TaskAttachment[]
+  activity    TaskActivity[]
+  notifications Notification[]
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, deadlineAt])
+}
+
+model RecurringTask {
+  id          String               @id @default(cuid())
+  workspaceId String
+  title       String
+  description String?
+  assigneeId  String
+  priority    Priority             @default(MEDIUM)
+  frequency   RecurrenceFrequency
+  // for CUSTOM: array of ISO weekday numbers (1=Mon..7=Sun)
+  weekdays    Int[]                @default([])
+  timeOfDay   String               // "HH:mm" the next occurrence is generated for
+  active      Boolean              @default(true)
+  createdAt   DateTime             @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tasks     Task[]
+}
+
+model TaskComment {
+  id        String   @id @default(cuid())
+  taskId    String
+  authorId  String
+  text      String
+  createdAt DateTime @default(now())
+
+  task   Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id])
+
+  @@index([taskId])
+}
+
+model TaskAttachment {
+  id         String   @id @default(cuid())
+  taskId     String
+  uploaderId String
+  filename   String
+  mimeType   String
+  size       Int
+  storageKey String
+  createdAt  DateTime @default(now())
+
+  task     Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploader User @relation(fields: [uploaderId], references: [id])
+
+  @@index([taskId])
+}
+
+model TaskActivity {
+  id        String   @id @default(cuid())
+  taskId    String?
+  workspaceId String
+  actorId   String
+  type      String   // 'task_created' | 'task_updated' | 'task_completed' | 'task_reopened' |
+                      // 'deadline_changed' | 'progress_changed' | 'comment_added' |
+                      // 'attachment_added' | 'work_started' | 'work_stopped'
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  task  Task? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actor User  @relation(fields: [actorId], references: [id])
+
+  @@index([workspaceId, createdAt])
+}
+
+model Presence {
+  userId       String          @id
+  status       PresenceStatus  @default(OFFLINE)
+  workingTaskId String?
+  lastSeenAt   DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model NotificationPreference {
+  userId              String  @id
+  deadline24h         Boolean @default(true)
+  deadline3h          Boolean @default(true)
+  deadline1h          Boolean @default(true)
+  deadline30m         Boolean @default(true)
+  deadline10m         Boolean @default(false)
+  friendCreatedTask   Boolean @default(true)
+  assignedNewTask     Boolean @default(true)
+  friendCompletedTask Boolean @default(true)
+  friendStartedWorking Boolean @default(false)
+  commentAdded        Boolean @default(true)
+  taskOverdue         Boolean @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  taskId    String?
+  type      String
+  payload   Json?
+  sentAt    DateTime?
+  scheduledFor DateTime
+  createdAt DateTime @default(now())
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  // prevents duplicate scheduling of the same reminder for the same task
+  @@unique([taskId, userId, type])
+  @@index([scheduledFor, sentAt])
+}

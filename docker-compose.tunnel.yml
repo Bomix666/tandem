@@ -1,0 +1,26 @@
+# Быстрый способ получить публичный HTTPS-адрес без покупки хостинга и без
+# регистрации где-либо — "quick tunnel" от Cloudflare. Ссылка временная
+# (вида https://random-words.trycloudflare.com) и живёт, пока контейнер
+# запущен; для постоянного адреса см. README §8 (реальный деплой на
+# Railway/Fly/VPS + домен).
+#
+# Использование:
+#   docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d
+#   docker compose logs cloudflared    # найти сгенерированный https-адрес
+#
+# Полученный адрес нужно прописать в .env как TELEGRAM_WEBAPP_URL и
+# APP_URL, перезапустить `app`, и указать его же в @BotFather (/newapp).
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://app:3000
+    # Встроенный DNS Docker (127.0.0.11) на части машин (VPN, нестандартный
+    # резолвер хоста) не отвечает на SRV-запросы argotunnel.com — cloudflared
+    # падает в цикле и каждый раз выдаёт новый адрес. Явные DNS это лечат.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    depends_on:
+      - app

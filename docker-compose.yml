@@ -1,0 +1,71 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tandem
+      POSTGRES_PASSWORD: tandem
+      POSTGRES_DB: tandem
+    volumes:
+      - tandem_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tandem"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # берётся из .env рядом с compose-файлом
+        NEXT_PUBLIC_TELEGRAM_BOT_USERNAME: ${NEXT_PUBLIC_TELEGRAM_BOT_USERNAME:-}
+        NEXT_PUBLIC_TELEGRAM_APP_SHORT_NAME: ${NEXT_PUBLIC_TELEGRAM_APP_SHORT_NAME:-}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://tandem:tandem@db:5432/tandem
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_started
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://tandem:tandem@db:5432/tandem
+      NODE_ENV: production
+
+  # Раз в минуту дёргает /api/notifications/cron — замена Vercel Cron для
+  # self-hosted варианта (см. vercel.json, если деплоишь на Vercel вместо
+  # Docker). CRON_SECRET берётся из .env — тот же, что и в приложении.
+  cron:
+    image: alpine:3.20
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    env_file: .env
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache curl >/dev/null
+        while true; do
+          curl -fsS "http://app:3000/api/notifications/cron?secret=$$CRON_SECRET" || true
+          sleep 60
+        done
+
+volumes:
+  tandem_db_data:
