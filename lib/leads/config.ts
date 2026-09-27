@@ -15,6 +15,13 @@ export const leadsConfig = {
   get yandexApiUrl(): string {
     return process.env.YANDEX_PLACES_API_URL?.trim() || "https://search-maps.yandex.ru/v1/";
   },
+  /** Сколько держать страницу выдачи Яндекса в памяти (мс), чтобы не тратить суточный лимит повторно. 0 — выключить кеш (тесты). */
+  get yandexPageCacheMs(): number {
+    const raw = process.env.YANDEX_PAGE_CACHE_MS;
+    if (raw === undefined || raw === "") return 12 * 3600_000;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : 12 * 3600_000;
+  },
   /** OpenStreetMap — дополнительная проверка и дополнение данных. Ключ не нужен. */
   get osmEnabled(): boolean {
     return process.env.LEADS_OSM_ENABLED !== "false";

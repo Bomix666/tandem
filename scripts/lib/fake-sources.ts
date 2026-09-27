@@ -131,6 +131,7 @@ export function fakeSourcesEnv(port: number, withYandex = true): Record<string, 
     OVERPASS_API_URL: `http://127.0.0.1:${port}/overpass`,
     NOMINATIM_URL: `http://127.0.0.1:${port}/nominatim`,
     YANDEX_RETRY_DELAY_MS: "0", // в тестах повторы без пауз
+    YANDEX_PAGE_CACHE_MS: "0", // в тестах кеш страниц выключен — каждый сценарий бьёт по фейковому серверу
     LEADS_ALLOW_PRIVATE_URLS: "true",
     LEADS_OSM_ENABLED: "true",
   };

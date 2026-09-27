@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveNiche } from "../niches";
 import { buildOverpassQuery, parseOverpass } from "../providers/osm";
-import { parseYandexResponse, ProviderError, searchYandex } from "../providers/yandex";
+import { parseYandexResponse, ProviderError, resetYandexState, searchYandex } from "../providers/yandex";
 
 describe("parseYandexResponse", () => {
   it("разбирает организации по документированному формату", () => {
@@ -138,6 +138,7 @@ describe("searchYandex: повторы при сбоях", () => {
   const reply = (status: number, body: unknown) => new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
 
   beforeEach(() => {
+    resetYandexState();
     process.env.YANDEX_PLACES_API_KEY = "test-key";
     process.env.YANDEX_RETRY_DELAY_MS = "0";
     vi.spyOn(console, "error").mockImplementation(() => void 0);
@@ -149,15 +150,15 @@ describe("searchYandex: повторы при сбоях", () => {
     delete process.env.YANDEX_RETRY_DELAY_MS;
   });
 
-  it("разовый 403 не роняет поиск: второй запрос проходит", async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce(reply(403, "Invalid api key")).mockResolvedValueOnce(reply(200, ok));
+  it("сбой сервера (502) повторяется, второй запрос проходит", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(reply(502, "Bad gateway")).mockResolvedValueOnce(reply(200, ok));
     vi.stubGlobal("fetch", fetchMock);
     const res = await searchYandex({ text: "кафе Москва", skip: 0 });
     expect(res.items.map((i) => i.name)).toEqual(["Бизнес"]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("постоянный 403 → ошибка с ответом Яндекса (после 3 попыток)", async () => {
+  it("403 «Invalid api key» — без повторов, с текстом Яндекса", async () => {
     const fetchMock = vi.fn().mockImplementation(async () => reply(403, "Invalid api key"));
     vi.stubGlobal("fetch", fetchMock);
     const err = (await searchYandex({ text: "x", skip: 0 }).then(
@@ -167,7 +168,34 @@ describe("searchYandex: повторы при сбоях", () => {
     expect(err).toBeInstanceOf(ProviderError);
     expect(err.message).toContain("Яндекс отклонил ключ");
     expect(err.message).toContain("Invalid api key");
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("403 «Limit is exceeded» — это лимит, а не плохой ключ; до конца суток Яндекс больше не дёргаем", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => reply(403, "<error><message>Limit is exceeded</message></error>"));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(searchYandex({ text: "x", skip: 0 })).rejects.toThrow("исчерпан суточный лимит");
+    await expect(searchYandex({ text: "y", skip: 0 })).rejects.toThrow("исчерпан суточный лимит");
+    expect(fetchMock).toHaveBeenCalledTimes(1); // второй поиск не потратил запрос
+  });
+
+  it("одна и та же страница выдачи берётся из кеша, а не из лимита", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => reply(200, ok));
+    vi.stubGlobal("fetch", fetchMock);
+    await searchYandex({ text: "Кафе Москва", skip: 0 });
+    await searchYandex({ text: "кафе москва", skip: 0 });
+    await searchYandex({ text: "кафе москва", skip: 50 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("YANDEX_PAGE_CACHE_MS=0 выключает кеш — каждый вызов бьёт по сети", async () => {
+    process.env.YANDEX_PAGE_CACHE_MS = "0";
+    const fetchMock = vi.fn().mockImplementation(async () => reply(200, ok));
+    vi.stubGlobal("fetch", fetchMock);
+    await searchYandex({ text: "кафе москва", skip: 0 });
+    await searchYandex({ text: "кафе москва", skip: 0 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    delete process.env.YANDEX_PAGE_CACHE_MS;
   });
 
   it("ошибка клиента (400) не повторяется", async () => {
