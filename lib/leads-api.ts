@@ -2,10 +2,27 @@
 // Авторизация — тем же apiFetch (Telegram initData), что и у задач.
 
 import { apiFetch } from "./telegram-client";
-import type { LeadDTO, LeadFilterDTO, LeadSearchDTO, LeadStatusDTO, LeadsMetaDTO } from "@/types/leads";
+import type {
+  AnalyticsDTO,
+  DashboardDTO,
+  FollowUpDTO,
+  LeadDTO,
+  LeadFilterDTO,
+  LeadSearchDTO,
+  LeadStatusDTO,
+  LeadsMetaDTO,
+  OutreachChannelDTO,
+  OutreachDTO,
+  OutreachStatusDTO,
+  SenderDTO,
+} from "@/types/leads";
 
 export function getLeadsMeta() {
   return apiFetch<LeadsMetaDTO>("/api/leads/meta");
+}
+
+export function setSender(sender: Partial<SenderDTO>) {
+  return apiFetch<LeadsMetaDTO>("/api/leads/meta", { method: "PATCH", body: JSON.stringify({ sender }) });
 }
 
 export function setAvgCheck(avgCheck: number) {
@@ -68,4 +85,59 @@ export function getSearch(id: string) {
 
 export function listSearches(page = 0) {
   return apiFetch<{ searches: LeadSearchDTO[]; total: number }>(`/api/leads/searches?page=${page}`);
+}
+
+// ---------- Sales OS: дашборд, обращения, follow-up, аналитика ----------
+
+export function getDashboard() {
+  return apiFetch<{ dashboard: DashboardDTO }>("/api/leads/dashboard");
+}
+
+export function getAnalytics(period: 0 | 7 | 30) {
+  return apiFetch<{ analytics: AnalyticsDTO }>(`/api/leads/analytics?period=${period}`);
+}
+
+/** «✨ Подготовить письмо» / «💬 Сообщение»: открыть черновик канала или создать его. */
+export function prepareOutreach(leadId: string, channel: OutreachChannelDTO) {
+  return apiFetch<{ outreach: OutreachDTO; reused: boolean }>(`/api/leads/${leadId}/outreach`, { method: "POST", body: JSON.stringify({ channel }) });
+}
+
+export function getOutreach(id: string) {
+  return apiFetch<{ outreach: OutreachDTO }>(`/api/leads/outreach/${id}`);
+}
+
+export function listOutreach(status: OutreachStatusDTO, page = 0) {
+  return apiFetch<{ counts: Record<OutreachStatusDTO, number>; items: OutreachDTO[]; total: number }>(`/api/leads/outreach?status=${status}&page=${page}`);
+}
+
+export function saveOutreachText(id: string, subject: string | null, body: string) {
+  return apiFetch<{ outreach: OutreachDTO }>(`/api/leads/outreach/${id}`, { method: "PATCH", body: JSON.stringify({ subject, body }) });
+}
+
+export type OutreachAction = "regenerate" | "ready" | "sent" | "replied" | "rejected" | "client";
+
+/** Отметки пользователя. «sent» — он отправил сам: приложение ничего не отправляет. */
+export function outreachAction(id: string, action: OutreachAction) {
+  return apiFetch<{ outreach: OutreachDTO }>(`/api/leads/outreach/${id}`, { method: "PATCH", body: JSON.stringify({ action }) });
+}
+
+export function discardOutreach(id: string) {
+  return apiFetch<{ leadId: string }>(`/api/leads/outreach/${id}`, { method: "DELETE" });
+}
+
+export function setFollowUp(leadId: string, when: { days: number } | { at: string }, outreachId?: string | null) {
+  return apiFetch<{ followUp: { taskId: string; at: string; created: boolean } }>(`/api/leads/${leadId}/followup`, {
+    method: "POST",
+    body: JSON.stringify({ ...when, outreachId: outreachId ?? null }),
+  });
+}
+
+export function listFollowUps(page = 0) {
+  return apiFetch<{ items: FollowUpDTO[]; total: number; counts: DashboardDTO["followUps"] }>(`/api/leads/followups?page=${page}`);
+}
+
+export type FollowUpClose = "replied" | "rejected" | "client" | "again" | "done";
+
+export function followUpAction(taskId: string, action: { action: "snooze"; days: number } | { action: "close"; how: FollowUpClose }) {
+  return apiFetch<{ followUp: FollowUpDTO | null }>(`/api/leads/followups/${taskId}`, { method: "POST", body: JSON.stringify(action) });
 }

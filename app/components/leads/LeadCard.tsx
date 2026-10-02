@@ -1,7 +1,8 @@
 "use client";
 
-import { LEAD_STATUS_EMOJI, LEAD_STATUS_LABELS } from "@/lib/leads/labels";
+import { LEAD_STATUS_EMOJI, LEAD_STATUS_LABELS, OUTREACH_STATUS_EMOJI, OUTREACH_STATUS_LABELS } from "@/lib/leads/labels";
 import type { LeadDTO } from "@/types/leads";
+import { formatDayTime } from "./format";
 
 /** Короткая сводка по сайту для списка: главное, из-за чего лид интересен. */
 export function siteTag(lead: LeadDTO): { text: string; tone: "warn" | "good" | "" } {
@@ -31,13 +32,20 @@ export function LeadCard({ lead, onOpen }: { lead: LeadDTO; onOpen: () => void }
         <span className={`tag ${site.tone}`}>{site.text}</span>
         {lead.phones.length > 0 && <span className="tag">телефон</span>}
         {lead.socials.length > 0 && <span className="tag">{lead.socials.map((s) => s.label).slice(0, 2).join(", ")}</span>}
-        {lead.status !== "NEW" && (
+        {lead.status !== "NEW" && lead.status !== "FOUND" && (
           <span className="tag gold">
             {LEAD_STATUS_EMOJI[lead.status]} {LEAD_STATUS_LABELS[lead.status]}
           </span>
         )}
         {lead.saved && <span className="tag gold">❤️</span>}
-        {lead.tasks.length > 0 && <span className="tag good">✓ задача</span>}
+        {lead.emails.length > 0 && <span className="tag">📧 email</span>}
+        {lead.tasks.some((t) => t.kind === "CONTACT") && <span className="tag good">✓ задача</span>}
+        {lead.outreach && (
+          <span className="tag gold">
+            {OUTREACH_STATUS_EMOJI[lead.outreach.status]} {OUTREACH_STATUS_LABELS[lead.outreach.status].toLowerCase()}
+          </span>
+        )}
+        {lead.followUp && <span className="tag warn">⏰ {formatDayTime(lead.followUp.at)}</span>}
       </div>
     </div>
   );

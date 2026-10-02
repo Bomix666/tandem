@@ -171,6 +171,16 @@ export async function editOutreachText(id: string, workspaceId: string, input: s
   return updated;
 }
 
+/** Правка из Mini App: тема и текст отдельными полями. */
+export async function updateOutreachContent(id: string, workspaceId: string, input: { subject?: string | null; body: string }): Promise<Outreach | null> {
+  const o = await prisma.outreach.findFirst({ where: { id, workspaceId, status: { in: EDITABLE } } });
+  if (!o) return null;
+  const subject = o.channel === "EMAIL" ? (input.subject?.trim() || o.subject)?.slice(0, 200) ?? null : null;
+  const updated = await prisma.outreach.update({ where: { id }, data: { subject, body: input.body.trim().slice(0, 4000), generator: "manual" } });
+  if (o.channel === "EMAIL") await prisma.lead.update({ where: { id: o.leadId }, data: { proposal: updated.body } });
+  return updated;
+}
+
 /** «❌ Отмена» черновика. Отправленные обращения не удаляются — это история. */
 export async function discardDraft(id: string, workspaceId: string): Promise<{ leadId: string } | null> {
   const o = await prisma.outreach.findFirst({ where: { id, workspaceId, status: { in: EDITABLE } } });

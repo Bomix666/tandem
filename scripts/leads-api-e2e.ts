@@ -48,6 +48,14 @@ async function main() {
   const search = await import("../app/api/leads/searches/[id]/route");
   const meta = await import("../app/api/leads/meta/route");
   const mail = await import("../app/go/mail/[id]/route");
+  const dashboardRoute = await import("../app/api/leads/dashboard/route");
+  const analyticsRoute = await import("../app/api/leads/analytics/route");
+  const leadOutreach = await import("../app/api/leads/[id]/outreach/route");
+  const outreachList = await import("../app/api/leads/outreach/route");
+  const outreachOne = await import("../app/api/leads/outreach/[oid]/route");
+  const leadFollowUp = await import("../app/api/leads/[id]/followup/route");
+  const followUps = await import("../app/api/leads/followups/route");
+  const followUpOne = await import("../app/api/leads/followups/[taskId]/route");
   const { outreachMailUrl } = await import("../lib/leads/outreach/links");
 
   async function call(handler: Handler, method: string, path: string, user: number, body?: unknown, params: Record<string, string> = {}): Promise<Res> {
@@ -243,6 +251,57 @@ async function main() {
     check("/go/mail: без верной подписи — 404", forged.status === 404);
     list = await call(leads.GET as Handler, "GET", "/api/leads?filter=w", 1);
     check("фильтр «⏳ Ждут ответа» принимается API", list.status === 200);
+
+    // ===== Sales OS в Mini App: дашборд → письмо → отправил → follow-up → ответ =====
+    const dash = await call(dashboardRoute.GET as Handler, "GET", "/api/leads/dashboard", 2);
+    check("дашборд: реальные счётчики и ближайшее действие", dash.status === 200 && dash.json.dashboard.pipeline.toContact === 1 && !!dash.json.dashboard.next, dash.json.dashboard);
+    const prep = await call(leadOutreach.POST as Handler, "POST", `/api/leads/${lv.id}/outreach`, 1, { channel: "EMAIL" }, { id: lv.id });
+    const oid = prep.json.outreach.id;
+    check(
+      "письмо: открыт существующий черновик, ссылка «Открыть почту», проверка адреса",
+      prep.status === 200 && prep.json.reused && oid === lvOutreach.id && prep.json.outreach.openUrl?.startsWith("https://app.example/go/mail/") && prep.json.outreach.recipientCheck === "UNVERIFIED",
+      prep.json
+    );
+    let r = await call(outreachOne.PATCH as Handler, "PATCH", `/api/leads/outreach/${oid}`, 1, { subject: "Сайт для Lavka", body: "Добрый день! Свой текст письма для Lavka Barber." }, { oid });
+    check("✏️ свой текст и тема", r.status === 200 && r.json.outreach.subject === "Сайт для Lavka" && r.json.outreach.edited, r.json);
+    r = await call(outreachOne.PATCH as Handler, "PATCH", `/api/leads/outreach/${oid}`, 1, { action: "regenerate" }, { oid });
+    check("🔄 другой вариант — та же запись, шаблонный текст", r.json.outreach.id === oid && r.json.outreach.variant === 1 && !r.json.outreach.edited);
+    r = await call(outreachOne.PATCH as Handler, "PATCH", `/api/leads/outreach/${oid}`, 1, { action: "sent" }, { oid });
+    check("✅ отправил: «Отправлено», лид «📨 Связались»", r.json.outreach.status === "SENT" && !r.json.outreach.editable && (await prisma.lead.findUniqueOrThrow({ where: { id: lv.id } })).status === "CONTACTED", r.json.outreach);
+    const late = await call(outreachOne.PATCH as Handler, "PATCH", `/api/leads/outreach/${oid}`, 1, { subject: null, body: "Поздняя правка уже отправленного письма" }, { oid });
+    check("отправленное письмо не правится → 409", late.status === 409);
+
+    const fu1 = await call(leadFollowUp.POST as Handler, "POST", `/api/leads/${lv.id}/followup`, 1, { days: 2, outreachId: oid }, { id: lv.id });
+    const fuAt = new Date(Date.now() + 3 * 86_400_000).toISOString();
+    const fu2 = await call(leadFollowUp.POST as Handler, "POST", `/api/leads/${lv.id}/followup`, 2, { at: fuAt }, { id: lv.id });
+    check("⏰ follow-up: создан, повтор — перенос без дубля", fu1.status === 201 && fu2.status === 200 && fu2.json.followUp.taskId === fu1.json.followUp.taskId && fu2.json.followUp.at === fuAt, [fu1.json, fu2.json]);
+    const past = await call(leadFollowUp.POST as Handler, "POST", `/api/leads/${lv.id}/followup`, 1, { at: new Date(Date.now() - 86_400_000).toISOString() }, { id: lv.id });
+    check("дата в прошлом → 400", past.status === 400);
+    let fl = await call(followUps.GET as Handler, "GET", "/api/leads/followups", 1);
+    check("список follow-up: лид, срок, письмо", fl.json.total === 1 && fl.json.items[0].leadName === "Lavka Barber" && fl.json.items[0].outreach?.id === oid && fl.json.counts.later === 1, fl.json);
+    const taskId = fu1.json.followUp.taskId;
+    r = await call(followUpOne.POST as Handler, "POST", `/api/leads/followups/${taskId}`, 1, { action: "snooze", days: 1 }, { taskId });
+    check("⏰ отложить на день", r.status === 200 && r.json.followUp.scope !== "overdue", r.json);
+    r = await call(followUpOne.POST as Handler, "POST", `/api/leads/followups/${taskId}`, 1, { action: "close", how: "replied" }, { taskId });
+    const replied = await call(outreachOne.GET as Handler, "GET", `/api/leads/outreach/${oid}`, 1, undefined, { oid });
+    check("✅ закрыть «ответили»: письмо «Ответ получен», лид «💬 Переговоры»", r.json.followUp.done && replied.json.outreach.status === "REPLIED" && (await prisma.lead.findUniqueOrThrow({ where: { id: lv.id } })).status === "NEGOTIATION");
+    const closedAgain = await call(followUpOne.POST as Handler, "POST", `/api/leads/followups/${taskId}`, 1, { action: "snooze", days: 1 }, { taskId });
+    fl = await call(followUps.GET as Handler, "GET", "/api/leads/followups", 1);
+    check("закрытый follow-up больше не трогается и не в списке", closedAgain.status === 409 && fl.json.total === 0);
+
+    const outList = await call(outreachList.GET as Handler, "GET", "/api/leads/outreach?status=REPLIED", 2);
+    check("📨 Outreach: список по статусу и счётчики", outList.json.items.length === 1 && outList.json.items[0].leadName === "Lavka Barber" && outList.json.counts.REPLIED === 1 && outList.json.counts.DRAFT >= 1, outList.json.counts);
+    const wa = await call(leadOutreach.POST as Handler, "POST", `/api/leads/${lv.id}/outreach`, 1, { channel: "WHATSAPP" }, { id: lv.id });
+    check("📱 WhatsApp: новый черновик и ссылка wa.me", wa.status === 201 && wa.json.outreach.openUrl?.startsWith("https://wa.me/") && wa.json.outreach.channel === "WHATSAPP", wa.json.outreach);
+    const del = await call(outreachOne.DELETE as Handler, "DELETE", `/api/leads/outreach/${wa.json.outreach.id}`, 1, undefined, { oid: wa.json.outreach.id });
+    const delSent = await call(outreachOne.DELETE as Handler, "DELETE", `/api/leads/outreach/${oid}`, 1, undefined, { oid });
+    check("❌ удаляется только черновик", del.status === 200 && delSent.status === 409);
+
+    const an = await call(analyticsRoute.GET as Handler, "GET", "/api/leads/analytics?period=7", 1);
+    check("📊 аналитика: связались, ответили, коэффициенты", an.json.analytics.period === 7 && an.json.analytics.contacted >= 1 && an.json.analytics.replied >= 1 && typeof an.json.analytics.rates.reply === "number", an.json.analytics);
+    const sender = await call(meta.PATCH as Handler, "PATCH", "/api/leads/meta", 1, { sender: { name: "Никита", portfolioUrl: "https://portfolio.example" } });
+    const badSender = await call(meta.PATCH as Handler, "PATCH", "/api/leads/meta", 1, { sender: { portfolioUrl: "не ссылка" } });
+    check("✍️ подпись из Mini App сохраняется (и проверяется ссылка)", sender.json.sender.name === "Никита" && sender.json.sender.portfolioUrl === "https://portfolio.example" && badSender.status === 400, sender.json.sender);
     list = await call(leads.GET as Handler, "GET", "/api/leads?filter=d", 1);
     check("фильтр «🔎 Найденные»", list.status === 200 && list.json.leads.every((l: { status: string }) => l.status === "FOUND"), list.json.total);
 

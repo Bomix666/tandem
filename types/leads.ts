@@ -53,8 +53,96 @@ export interface LeadDTO {
   status: LeadStatusDTO;
   saved: boolean;
   proposal: string | null;
-  tasks: { id: string; title: string; createdAt: string }[];
+  tasks: { id: string; title: string; createdAt: string; kind: "CONTACT" | "FOLLOW_UP"; done: boolean }[];
+  /** Открытый follow-up: когда напомнить. */
+  followUp: { taskId: string; at: string } | null;
+  /** Последнее обращение (письмо / сообщение). */
+  outreach: OutreachSummaryDTO | null;
   createdAt: string;
+}
+
+// ---------- Outreach, follow-up, дашборд, аналитика (Sales OS) ----------
+
+export type OutreachChannelDTO = "EMAIL" | "TELEGRAM" | "WHATSAPP" | "SOCIAL";
+export type OutreachStatusDTO = "DRAFT" | "READY" | "SENT" | "WAITING" | "REPLIED" | "FOLLOW_UP" | "REJECTED" | "CLIENT";
+
+export interface OutreachSummaryDTO {
+  id: string;
+  channel: OutreachChannelDTO;
+  status: OutreachStatusDTO;
+  sentAt: string | null;
+  followUpAt: string | null;
+  updatedAt: string;
+}
+
+export interface OutreachDTO extends OutreachSummaryDTO {
+  leadId: string;
+  leadName: string;
+  recipient: string | null;
+  recipientCheck: "VALID" | "UNVERIFIED" | "INVALID" | null;
+  subject: string | null;
+  body: string;
+  /** Текст правил пользователь (а не шаблон). */
+  edited: boolean;
+  variant: number;
+  repliedAt: string | null;
+  createdAt: string;
+  /** Можно править — ещё не отмечено отправленным. */
+  editable: boolean;
+  warnings: string[];
+  engine: string;
+  /**
+   * Куда пользователь сам отправит: письмо — подписанная страница /go/mail (в ней
+   * mailto:), WhatsApp — wa.me с текстом, Telegram/соцсети — страница контакта.
+   */
+  openUrl: string | null;
+  openLabel: string | null;
+}
+
+export interface FollowUpDTO {
+  taskId: string;
+  leadId: string;
+  leadName: string;
+  leadStatus: LeadStatusDTO;
+  at: string;
+  scope: "overdue" | "today" | "later";
+  done: boolean;
+  outreach: { id: string; channel: OutreachChannelDTO; sentAt: string | null; recipient: string | null } | null;
+}
+
+export interface NextActionDTO {
+  kind: "followup" | "reply" | "send" | "prepare" | "hot" | "upcoming";
+  leadId: string;
+  name: string;
+  outreachId?: string;
+  taskId?: string;
+  at?: string;
+  overdue?: boolean;
+  score?: number;
+}
+
+export interface DashboardDTO {
+  date: string;
+  today: { newLeads: number; toProcess: number; followUps: number; replies: number; hot: number };
+  pipeline: { fresh: number; toContact: number; waiting: number; negotiation: number; clients: number };
+  outreachToday: { drafted: number; sent: number; replies: number };
+  followUps: { overdue: number; today: number; later: number };
+  next: NextActionDTO | null;
+}
+
+export interface AnalyticsDTO {
+  period: 7 | 30 | null;
+  total: number;
+  found: number;
+  saved: number;
+  contacted: number;
+  replied: number;
+  negotiation: number;
+  clients: number;
+  rejected: number;
+  outreach: { drafted: number; sent: number; replies: number };
+  rates: { contact: number | null; reply: number | null; conversion: number | null };
+  avgCheck: number;
 }
 
 export interface LeadSearchDTO {
@@ -100,4 +188,13 @@ export interface LeadsMetaDTO {
   stats: LeadsStatsDTO;
   /** Идущий сейчас поиск в пространстве (запущенный здесь, партнёром или из бота). */
   activeSearch: LeadSearchDTO | null;
+  /** Подпись в письмах и сообщениях — общая с ботом («⚙️ Настройки → Подпись»). */
+  sender: SenderDTO;
+}
+
+export interface SenderDTO {
+  name: string | null;
+  company: string | null;
+  portfolioUrl: string | null;
+  contact: string | null;
 }

@@ -1,47 +1,71 @@
 "use client";
 
+// Карточка лида: контакты с проверкой email, Lead Score, возможность, статус и
+// действия Sales OS — письмо, сообщение в мессенджер, задача, follow-up.
+// Письма и сообщения открываются в OutreachSheet; приложение ничего не
+// отправляет само.
+
 import { useEffect, useState } from "react";
-import { LEAD_STATUS_EMOJI, LEAD_STATUS_LABELS, LEAD_STATUS_ORDER, POTENTIAL_LABELS } from "@/lib/leads/labels";
+import {
+  CHANNEL_EMOJI,
+  CHANNEL_LABELS,
+  LEAD_STATUS_EMOJI,
+  LEAD_STATUS_LABELS,
+  LEAD_STATUS_ORDER,
+  OUTREACH_STATUS_EMOJI,
+  OUTREACH_STATUS_LABELS,
+  POTENTIAL_LABELS,
+} from "@/lib/leads/labels";
 import * as leadsApi from "@/lib/leads-api";
 import { haptic, hapticSuccess, openExternalLink } from "@/lib/telegram-client";
 import { useWorkspace } from "@/lib/workspace-context";
-import type { LeadDTO, LeadStatusDTO } from "@/types/leads";
-import { displayAddress, formatDateFull } from "./format";
+import type { LeadDTO, LeadStatusDTO, OutreachChannelDTO } from "@/types/leads";
+import { displayAddress, formatDateFull, formatDayTime, relativeDay } from "./format";
+import { FollowUpPicker, type FollowUpWhen } from "./FollowUpPicker";
+import { statusTone } from "./OutreachSheet";
 
 interface Props {
   /** Лиды текущего списка — для «← / →» внутри карточки. */
   ids: string[];
   index: number | null;
+  /** Меняется, когда лид мог измениться снаружи (письмо, follow-up) — карточка перезагружается. */
+  refreshKey: number;
   onNavigate: (index: number) => void;
   onClose: () => void;
   onChanged: (lead: LeadDTO) => void;
+  onOpenOutreach: (outreachId: string) => void;
 }
 
-export function LeadDetailSheet({ ids, index, onNavigate, onClose, onChanged }: Props) {
+const MESSENGERS: { channel: OutreachChannelDTO; hint: string }[] = [
+  { channel: "TELEGRAM", hint: "коротко" },
+  { channel: "WHATSAPP", hint: "коротко и по-разговорному" },
+  { channel: "SOCIAL", hint: "очень коротко" },
+];
+
+export function LeadDetailSheet({ ids, index, refreshKey, onNavigate, onClose, onChanged, onOpenOutreach }: Props) {
   const { showToast, refreshAll } = useWorkspace();
   const leadId = index !== null ? ids[index] ?? null : null;
   const [lead, setLead] = useState<LeadDTO | null>(null);
-  const [proposal, setProposal] = useState<{ text: string; engine: string; note: string | null } | null>(null);
   const [existingTask, setExistingTask] = useState<{ title: string; createdAt: string } | null>(null);
+  const [panel, setPanel] = useState<"message" | "followup" | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
-    setProposal(null);
     setExistingTask(null);
+    setPanel(null);
+  }, [leadId]);
+
+  useEffect(() => {
     if (!leadId) return;
     let cancelled = false;
     leadsApi
       .getLead(leadId)
-      .then(({ lead }) => {
-        if (cancelled) return;
-        setLead(lead);
-        if (lead.proposal) setProposal({ text: lead.proposal, engine: "сохранённый вариант", note: null });
-      })
+      .then(({ lead }) => !cancelled && setLead(lead))
       .catch(() => !cancelled && showToast("Не удалось открыть лид"));
     return () => {
       cancelled = true;
     };
-  }, [leadId, showToast]);
+  }, [leadId, refreshKey, showToast]);
 
   const open = leadId !== null;
   const shown = lead && lead.id === leadId ? lead : null;
@@ -49,6 +73,12 @@ export function LeadDetailSheet({ ids, index, onNavigate, onClose, onChanged }: 
   function apply(fresh: LeadDTO) {
     setLead(fresh);
     onChanged(fresh);
+  }
+
+  async function reload() {
+    if (!shown) return;
+    const fresh = await leadsApi.getLead(shown.id).catch(() => null);
+    if (fresh) apply(fresh.lead);
   }
 
   async function run<T>(key: string, fn: () => Promise<T>): Promise<T | undefined> {
@@ -79,26 +109,19 @@ export function LeadDetailSheet({ ids, index, onNavigate, onClose, onChanged }: 
     const res = await run("save", () => leadsApi.updateLead(shown.id, { saved: !shown.saved }));
     if (res) {
       apply(res.lead);
-      showToast(res.lead.saved ? "Лид сохранён" : "Убран из сохранённых");
+      showToast(res.lead.saved ? "❤️ Лид сохранён · в работе" : "Убран из сохранённых");
     }
   }
 
-  async function makeProposal() {
+  async function prepare(channel: OutreachChannelDTO) {
     if (!shown) return;
     haptic("medium");
-    const res = await run("proposal", () => leadsApi.createProposal(shown.id));
-    if (res) setProposal(res);
-  }
-
-  async function copyProposal() {
-    if (!proposal) return;
-    try {
-      await navigator.clipboard.writeText(proposal.text);
-      hapticSuccess();
-      showToast("Текст скопирован");
-    } catch {
-      showToast("Не удалось скопировать — выдели текст вручную");
-    }
+    const res = await run(`prepare-${channel}`, () => leadsApi.prepareOutreach(shown.id, channel));
+    if (!res) return;
+    setPanel(null);
+    if (res.reused) showToast("Открыл сохранённый черновик");
+    onOpenOutreach(res.outreach.id);
+    void reload();
   }
 
   async function makeTask(force: boolean) {
@@ -112,11 +135,24 @@ export function LeadDetailSheet({ ids, index, onNavigate, onClose, onChanged }: 
     }
     setExistingTask(null);
     hapticSuccess();
-    showToast("Задача создана — она в разделе «Задачи»");
-    const fresh = await leadsApi.getLead(shown.id).catch(() => null);
-    if (fresh) apply(fresh.lead);
+    showToast("Задача создана — лид в «📩 Связаться»");
+    await reload();
     refreshAll().catch(() => void 0);
   }
+
+  async function followUp(when: FollowUpWhen) {
+    if (!shown) return;
+    const res = await run("followup", () => leadsApi.setFollowUp(shown.id, when));
+    if (!res) return;
+    hapticSuccess();
+    setPanel(null);
+    showToast(`⏰ Follow-up ${res.followUp.created ? "поставлен" : "перенесён"}: ${formatDayTime(res.followUp.at)}`);
+    await reload();
+    refreshAll().catch(() => void 0);
+  }
+
+  const contactTasks = shown?.tasks.filter((t) => t.kind === "CONTACT") ?? [];
+  const emailDraft = shown?.outreach && shown.outreach.channel === "EMAIL" && (shown.outreach.status === "DRAFT" || shown.outreach.status === "READY");
 
   return (
     <>
@@ -151,25 +187,100 @@ export function LeadDetailSheet({ ids, index, onNavigate, onClose, onChanged }: 
               </div>
             </div>
 
+            <div className="flags">
+              <span className="pill gold">
+                {LEAD_STATUS_EMOJI[shown.status]} {LEAD_STATUS_LABELS[shown.status]}
+              </span>
+              {shown.saved && <span className="pill">❤️ сохранён</span>}
+              {contactTasks.length > 0 && <span className="pill">📋 {contactTasks.every((t) => t.done) ? "задача выполнена" : "задача"}</span>}
+              {shown.followUp && (
+                <span className={`pill ${relativeDay(shown.followUp.at).startsWith("просрочено") ? "rust" : "amber"}`}>⏰ {formatDayTime(shown.followUp.at)}</span>
+              )}
+              {shown.outreach && (
+                <span className={`pill ${statusTone(shown.outreach.status)}`}>
+                  {CHANNEL_EMOJI[shown.outreach.channel]} {OUTREACH_STATUS_LABELS[shown.outreach.status]}
+                </span>
+              )}
+            </div>
+
+            <div className="action-grid">
+              <button className="primary-btn" onClick={() => (emailDraft ? onOpenOutreach(shown.outreach!.id) : prepare("EMAIL"))} disabled={busy === "prepare-EMAIL"}>
+                {busy === "prepare-EMAIL" ? "Готовлю…" : emailDraft ? "✉️ Открыть письмо" : "✨ Подготовить письмо"}
+              </button>
+              <button className={`secondary-btn${panel === "message" ? " active" : ""}`} onClick={() => setPanel(panel === "message" ? null : "message")}>
+                💬 Сообщение
+              </button>
+              <button className="secondary-btn" onClick={() => makeTask(false)} disabled={busy === "task"}>
+                {busy === "task" ? "Создаю…" : contactTasks.length ? "✅ Задача есть" : "➕ Создать задачу"}
+              </button>
+              <button className="secondary-btn" onClick={() => setPanel(panel === "followup" ? null : "followup")}>
+                {shown.followUp ? "⏰ Follow-up ✓" : "⏰ Follow-up"}
+              </button>
+            </div>
+
+            {panel === "message" && (
+              <div className="picker">
+                <div className="label">💬 Канал — у каждого свой формат текста</div>
+                <div className="os-list" style={{ marginTop: 8 }}>
+                  {MESSENGERS.map((m) => (
+                    <div key={m.channel} className="o-card" onClick={() => prepare(m.channel)}>
+                      <div className="o-top">
+                        <div className="o-chan">{CHANNEL_EMOJI[m.channel]}</div>
+                        <div className="o-main">
+                          <div className="o-name">{CHANNEL_LABELS[m.channel]}</div>
+                          <div className="o-sub">{m.hint} · {channelContact(shown, m.channel)}</div>
+                        </div>
+                        <div className="go" style={{ color: "var(--ink-dim)" }}>
+                          {busy === `prepare-${m.channel}` ? "…" : "›"}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="o-hint">Ничего не отправляется автоматически: приложение готовит текст, отправляешь ты.</div>
+              </div>
+            )}
+            {panel === "followup" && <FollowUpPicker current={shown.followUp?.at} busy={busy === "followup"} onPick={followUp} />}
+            {existingTask && (
+              <div className="note warn">
+                У лида уже есть задача «{existingTask.title}» от {formatDateFull(existingTask.createdAt)}. Создать ещё одну?
+                <div className="btn-row">
+                  <button className="secondary-btn" onClick={() => makeTask(true)} disabled={busy === "task"}>
+                    Да, создать
+                  </button>
+                  <button className="secondary-btn" onClick={() => setExistingTask(null)}>
+                    Отмена
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {shown.outreach && (
+              <div className="kv" style={{ marginTop: 6 }}>
+                <div className="k">Обращение</div>
+                <div className="o-card" onClick={() => onOpenOutreach(shown.outreach!.id)}>
+                  <div className="o-top">
+                    <div className="o-chan">{CHANNEL_EMOJI[shown.outreach.channel]}</div>
+                    <div className="o-main">
+                      <div className="o-name">
+                        {CHANNEL_LABELS[shown.outreach.channel]} · {OUTREACH_STATUS_EMOJI[shown.outreach.status]} {OUTREACH_STATUS_LABELS[shown.outreach.status]}
+                      </div>
+                      <div className="o-sub">
+                        {shown.outreach.sentAt ? `отправлено ${formatDateFull(shown.outreach.sentAt)}` : "черновик — проверь и отправь"}
+                        {shown.outreach.followUpAt ? ` · ⏰ ${formatDayTime(shown.outreach.followUpAt)}` : ""}
+                      </div>
+                    </div>
+                    <div className="go" style={{ color: "var(--lime)" }}>
+                      ›
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="kv">
               <div className="k">Сайт</div>
               <SiteValue lead={shown} />
-            </div>
-
-            <div className="kv">
-              <div className="k">Телефон</div>
-              {shown.phones.length ? (
-                <div className="v">
-                  {shown.phones.map((p, i) => (
-                    <span key={p}>
-                      {i > 0 && ", "}
-                      <a href={`tel:${p.replace(/[^\d+]/g, "")}`}>{p}</a>
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <div className="v missing">Не найден</div>
-              )}
             </div>
 
             <div className="kv">
@@ -182,7 +293,7 @@ export function LeadDetailSheet({ ids, index, onNavigate, onClose, onChanged }: 
                         {c.check === "VALID" ? "🟢" : c.check === "INVALID" ? "🔴" : "🟡"}
                       </span>
                       <div className="emain">
-                        {c.check === "INVALID" ? <span className="dead">{c.value}</span> : <a href={`mailto:${c.value}`}>{c.value}</a>}
+                        {c.check === "INVALID" ? <span className="dead">{c.value}</span> : <span>{c.value}</span>}
                         <div className="esub">
                           {c.checkLabel ?? "Не проверен"} ·{" "}
                           {c.sourceUrl ? (
@@ -199,11 +310,20 @@ export function LeadDetailSheet({ ids, index, onNavigate, onClose, onChanged }: 
                   ))}
                 </div>
               ) : shown.emails.length ? (
+                <div className="v">{shown.emails.join(", ")}</div>
+              ) : (
+                <div className="v missing">Не найден</div>
+              )}
+            </div>
+
+            <div className="kv">
+              <div className="k">Телефон</div>
+              {shown.phones.length ? (
                 <div className="v">
-                  {shown.emails.map((m, i) => (
-                    <span key={m}>
+                  {shown.phones.map((p, i) => (
+                    <span key={p}>
                       {i > 0 && ", "}
-                      <a href={`mailto:${m}`}>{m}</a>
+                      <a href={`tel:${p.replace(/[^\d+]/g, "")}`}>{p}</a>
                     </span>
                   ))}
                 </div>
@@ -235,7 +355,7 @@ export function LeadDetailSheet({ ids, index, onNavigate, onClose, onChanged }: 
             )}
 
             <div className="kv">
-              <div className="k">Почему {shown.score}/100</div>
+              <div className="k">🎯 Lead Score {shown.score}/100</div>
               <div className="reasons">
                 {shown.reasons.map((r) => (
                   <div key={r.label} className={`reason ${r.points > 0 ? "plus" : "minus"}`}>
@@ -249,7 +369,7 @@ export function LeadDetailSheet({ ids, index, onNavigate, onClose, onChanged }: 
 
             {shown.offer && (
               <div className="kv">
-                <div className="k">Что можно предложить</div>
+                <div className="k">💡 Возможность</div>
                 <div className="v">{shown.offer}</div>
               </div>
             )}
@@ -263,63 +383,6 @@ export function LeadDetailSheet({ ids, index, onNavigate, onClose, onChanged }: 
                   </div>
                 ))}
               </div>
-            </div>
-
-            <div className="kv">
-              <div className="k">Предложение</div>
-              {proposal ? (
-                <>
-                  <div className="proposal">{proposal.text}</div>
-                  <div className="proposal-meta">
-                    {proposal.engine === "сохранённый вариант" ? "Последний сгенерированный текст." : `Сделано: ${proposal.engine}.`}
-                    {proposal.note ? ` ${proposal.note}` : ""} Проверь перед отправкой — приложение ничего не отправляет само.
-                  </div>
-                  <div className="btn-row">
-                    <button className="secondary-btn" onClick={copyProposal}>
-                      Скопировать
-                    </button>
-                    <button className="secondary-btn" onClick={() => setStatus("CONTACTED")} disabled={shown.status === "CONTACTED"}>
-                      💬 Написали
-                    </button>
-                  </div>
-                  <button className="ghost-btn" onClick={makeProposal} disabled={busy === "proposal"}>
-                    Сгенерировать заново
-                  </button>
-                </>
-              ) : (
-                <button className="secondary-btn" onClick={makeProposal} disabled={busy === "proposal"}>
-                  {busy === "proposal" ? "Составляю…" : "✨ Создать предложение"}
-                </button>
-              )}
-            </div>
-
-            <div className="kv">
-              <div className="k">Задача</div>
-              {existingTask ? (
-                <div className="note warn" style={{ marginTop: 0 }}>
-                  У лида уже есть задача «{existingTask.title}» от {formatDateFull(existingTask.createdAt)}. Создать ещё одну?
-                  <div className="btn-row">
-                    <button className="secondary-btn" onClick={() => makeTask(true)} disabled={busy === "task"}>
-                      Да, создать
-                    </button>
-                    <button className="secondary-btn" onClick={() => setExistingTask(null)}>
-                      Отмена
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  {shown.tasks.length > 0 && (
-                    <div className="v" style={{ marginBottom: 8 }}>
-                      ✅ {shown.tasks[0]!.title}
-                      {shown.tasks.length > 1 ? ` (+${shown.tasks.length - 1})` : ""}
-                    </div>
-                  )}
-                  <button className="primary-btn" style={{ marginTop: 0 }} onClick={() => makeTask(false)} disabled={busy === "task"}>
-                    {busy === "task" ? "Создаю…" : shown.tasks.length ? "➕ Ещё одна задача" : "➕ Создать задачу"}
-                  </button>
-                </>
-              )}
             </div>
 
             <button className="ghost-btn" onClick={toggleSaved} disabled={busy === "save"}>
@@ -352,6 +415,14 @@ export function LeadDetailSheet({ ids, index, onNavigate, onClose, onChanged }: 
       </div>
     </>
   );
+}
+
+function channelContact(lead: LeadDTO, channel: OutreachChannelDTO): string {
+  const has = (t: string) => lead.socials.some((s) => s.type === t);
+  if (channel === "TELEGRAM") return has("telegram") ? "есть контакт" : "нет контакта — текст скопируешь";
+  if (channel === "WHATSAPP") return has("whatsapp") || lead.phones.length ? "есть номер" : "нет номера — текст скопируешь";
+  const pages = lead.socials.filter((s) => s.type === "vk" || s.type === "instagram").map((s) => s.label);
+  return pages.length ? pages.join(", ") : "нет страниц — текст скопируешь";
 }
 
 function SiteValue({ lead }: { lead: LeadDTO }) {

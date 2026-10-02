@@ -5,8 +5,9 @@ import * as leadsApi from "@/lib/leads-api";
 import type { LeadDTO, LeadFilterDTO, LeadsStatsDTO } from "@/types/leads";
 import { LeadCard } from "./LeadCard";
 
-const FILTERS: { key: LeadFilterDTO; label: string; count: (s: LeadsStatsDTO) => number }[] = [
+const FILTERS: { key: LeadFilterDTO; label: string; count?: (s: LeadsStatsDTO) => number }[] = [
   { key: "a", label: "Все", count: (s) => s.total },
+  { key: "h", label: "🔥 Горячие" },
   { key: "f", label: "❤️ Сохранённые", count: (s) => s.saved },
   { key: "d", label: "🔎 Найденные", count: (s) => s.byStatus.FOUND ?? 0 },
   { key: "n", label: "🆕 Новые", count: (s) => s.byStatus.NEW ?? 0 },
@@ -19,14 +20,15 @@ const FILTERS: { key: LeadFilterDTO; label: string; count: (s: LeadsStatsDTO) =>
 
 interface Props {
   stats: LeadsStatsDTO | null;
+  filter: LeadFilterDTO;
+  onFilter: (f: LeadFilterDTO) => void;
   /** Меняется, когда лиды могли измениться (закончился поиск и т. п.) — список перезагружается. */
   reloadKey: number;
   view: (lead: LeadDTO) => LeadDTO;
   onOpen: (ids: string[], index: number) => void;
 }
 
-export function LeadsList({ stats, reloadKey, view, onOpen }: Props) {
-  const [filter, setFilter] = useState<LeadFilterDTO>("a");
+export function LeadsList({ stats, filter, onFilter: setFilter, reloadKey, view, onOpen }: Props) {
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
   const [leads, setLeads] = useState<LeadDTO[]>([]);
@@ -78,7 +80,7 @@ export function LeadsList({ stats, reloadKey, view, onOpen }: Props) {
         {FILTERS.map((f) => (
           <div key={f.key} className={`pickchip${filter === f.key ? " active" : ""}`} onClick={() => setFilter(f.key)}>
             {f.label}
-            {stats && <span className="cnt">{f.count(stats)}</span>}
+            {stats && f.count && <span className="cnt">{f.count(stats)}</span>}
           </div>
         ))}
       </div>

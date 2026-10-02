@@ -44,3 +44,19 @@ export function parseMoney(text: string): number | null {
   value = Math.round(value);
   return value >= 1 && value <= 100_000_000 ? value : null;
 }
+
+export const formatDayTime = (iso: string) =>
+  new Date(iso).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+/** «сегодня», «завтра», «просрочено на 2 дн.», «через 5 дн.» — по календарным дням устройства. */
+export function relativeDay(iso: string, now = new Date()): string {
+  const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const at = new Date(iso);
+  const diff = Math.round((day(at) - day(now)) / 86_400_000);
+  if (diff === 0) return at < now ? "сегодня, время прошло" : "сегодня";
+  if (diff === 1) return "завтра";
+  if (diff < 0) return `просрочено на ${-diff} дн.`;
+  return `через ${diff} дн.`;
+}
+
+export const pct = (r: number | null) => (r === null ? "—" : `${Math.round(r * 100)}%`);
