@@ -1,10 +1,22 @@
 // Данные модуля «Поиск клиентов», которые Mini App получает от /api/leads/*.
 // Только типы — файл безопасно импортировать в клиентский код.
 
-export type LeadStatusDTO = "NEW" | "TO_CONTACT" | "CONTACTED" | "WAITING" | "NEGOTIATION" | "CLIENT" | "REJECTED" | "NOT_FIT";
+export type LeadStatusDTO = "FOUND" | "NEW" | "TO_CONTACT" | "CONTACTED" | "WAITING" | "NEGOTIATION" | "CLIENT" | "REJECTED" | "NOT_FIT";
 export type PotentialDTO = "HIGH" | "MEDIUM" | "LOW";
-/** a — все, f — сохранённые, n — новые, t — связаться, g — переговоры, c — клиенты, r — отказы. */
-export type LeadFilterDTO = "a" | "f" | "n" | "t" | "g" | "c" | "r";
+/** a — все, f — сохранённые, d — найденные, n — новые, t — связаться, g — переговоры, c — клиенты, r — отказы. */
+export type LeadFilterDTO = "a" | "f" | "d" | "n" | "t" | "g" | "c" | "r";
+
+/** Email лида: откуда взят и как проверен (🟢 VALID / 🟡 UNVERIFIED / 🔴 INVALID). */
+export interface LeadContactDTO {
+  value: string;
+  check: "VALID" | "UNVERIFIED" | "INVALID" | null;
+  checkLabel: string | null; // «Подтверждён», «Найден, не подтверждён», «Некорректный»
+  note: string | null; // почему такая оценка
+  source: "OSM" | "YANDEX" | "SITE" | "MANUAL";
+  sourceLabel: string;
+  sourceUrl: string | null;
+  primary: boolean;
+}
 
 export interface LeadSiteDTO {
   kind: "own" | "social" | "booking" | "none";
@@ -29,6 +41,8 @@ export interface LeadDTO {
   site: LeadSiteDTO;
   phones: string[];
   emails: string[];
+  /** Email с проверкой; пусто у старых лидов — тогда показываются emails. */
+  contacts: LeadContactDTO[];
   socials: { type: string; label: string; url: string }[];
   hours: string | null;
   sources: { provider: string; label: string; url: string }[];
@@ -50,11 +64,15 @@ export interface LeadSearchDTO {
   requested: number;
   extra: string | null;
   osmOnly: boolean;
+  source: "osm" | "yandex";
   parentId: string | null;
   status: "RUNNING" | "DONE" | "FAILED";
-  found: number;
+  candidates: number; // бизнесов нашли источники
+  found: number; // подходят
   checked: number;
   filtered: number;
+  withEmail: number;
+  needsReview: number;
   stage: string | null;
   warnings: string[];
   error: string | null;
@@ -74,6 +92,8 @@ export interface LeadsStatsDTO {
 export interface LeadsMetaDTO {
   yandex: boolean;
   osm: boolean;
+  /** «локальная копия от 02.10.2026, 1 234 567 бизнесов» */
+  osmStatus: string;
   proposalLabel: string;
   niches: string[];
   cities: string[];

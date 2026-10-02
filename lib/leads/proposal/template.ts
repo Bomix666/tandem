@@ -5,7 +5,7 @@
 import { socialLabel } from "../scoring";
 import type { LeadFacts, ProposalGenerator } from "./types";
 
-function observation(f: LeadFacts): string {
+export function observation(f: LeadFacts): string {
   const socials = f.socialTypes.filter((t) => t !== "taplink").map(socialLabel);
   const socialsText = socials.length === 1 ? socials[0] : socials.slice(0, 2).join(" и ");
 

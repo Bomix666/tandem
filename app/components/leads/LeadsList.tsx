@@ -8,6 +8,7 @@ import { LeadCard } from "./LeadCard";
 const FILTERS: { key: LeadFilterDTO; label: string; count: (s: LeadsStatsDTO) => number }[] = [
   { key: "a", label: "Все", count: (s) => s.total },
   { key: "f", label: "❤️ Сохранённые", count: (s) => s.saved },
+  { key: "d", label: "🔎 Найденные", count: (s) => s.byStatus.FOUND ?? 0 },
   { key: "n", label: "🆕 Новые", count: (s) => s.byStatus.NEW ?? 0 },
   { key: "t", label: "📩 Связаться", count: (s) => s.byStatus.TO_CONTACT ?? 0 },
   { key: "g", label: "🤝 Переговоры", count: (s) => s.byStatus.NEGOTIATION ?? 0 },

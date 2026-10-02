@@ -2,11 +2,12 @@
 // Задача создаётся в той же таблице Task и тем же путём, что и в Mini App:
 // запись в ленту активности, напоминания о дедлайне, уведомление партнёру.
 
-import type { Lead, Priority } from "@prisma/client";
+import type { Lead, LeadContact, Priority } from "@prisma/client";
 import { logActivity } from "../activity";
 import { notifyEvent, scheduleDeadlineReminders } from "../notifications";
 import { prisma } from "../prisma";
-import { formatScoreReasons, LEAD_STATUS_LABELS, POTENTIAL_LABELS } from "./labels";
+import { changeLeadStatus, recordLeadEvent } from "./events";
+import { EMAIL_CHECK_EMOJI, formatScoreReasons, LEAD_STATUS_LABELS, POTENTIAL_LABELS } from "./labels";
 import { socialLabel } from "./scoring";
 import type { ScoreReason, SocialLink, SourceRef } from "./types";
 
@@ -17,11 +18,17 @@ export function taskTitleForLead(lead: Pick<Lead, "name">): string {
 }
 
 /** Описание задачи: все данные лида, без выдуманных полей. */
-export function buildTaskDescription(lead: Lead): string {
+export function buildTaskDescription(lead: Lead & { contacts?: LeadContact[] }): string {
   const socials = (lead.socials as unknown as SocialLink[] | null) ?? [];
   const sources = (lead.sources as unknown as SourceRef[] | null) ?? [];
   const reasons = (lead.scoreReasons as unknown as ScoreReason[] | null) ?? [];
-  const contacts = [...lead.phones, ...lead.emails];
+  // email — с отметкой проверки: 🟢 подтверждён / 🟡 не подтверждён (🔴 не включаем)
+  const checked = new Map((lead.contacts ?? []).map((c) => [c.normalized, c.verification]));
+  const emails = lead.emails.map((e) => {
+    const v = checked.get(e);
+    return v ? `${e} ${EMAIL_CHECK_EMOJI[v]}` : e;
+  });
+  const contacts = [...lead.phones, ...emails];
   const lines = [
     "Тип: Продажа сайта",
     `Клиент: ${lead.name}`,
@@ -54,7 +61,7 @@ export async function createTaskFromLead(params: {
   const { leadId, workspace, user, force } = params;
   const lead = await prisma.lead.findFirst({
     where: { id: leadId, workspaceId: workspace.id },
-    include: { tasks: { orderBy: { createdAt: "desc" }, take: 1, include: { task: true } } },
+    include: { tasks: { orderBy: { createdAt: "desc" }, take: 1, include: { task: true } }, contacts: { where: { kind: "EMAIL" } } },
   });
   if (!lead) return { status: "not_found" };
 
@@ -74,7 +81,18 @@ export async function createTaskFromLead(params: {
       priority: PRIORITY_BY_POTENTIAL[lead.potential],
     },
   });
-  await prisma.leadTask.create({ data: { leadId: lead.id, taskId: task.id } });
+  await prisma.leadTask.create({ data: { leadId: lead.id, taskId: task.id, kind: "CONTACT" } });
+  await recordLeadEvent({ workspaceId: workspace.id, leadId: lead.id, type: "TASK_CREATED", actorId: user.id, meta: { taskId: task.id, kind: "CONTACT" } });
+  // Задача «связаться» = лид в работе: 🔎/🆕 → 📩 Связаться. Ничего не отправляется —
+  // письмо или сообщение пользователь отправляет сам из карточки.
+  await changeLeadStatus({
+    leadId: lead.id,
+    workspaceId: workspace.id,
+    status: "TO_CONTACT",
+    actorId: user.id,
+    onlyFrom: ["FOUND", "NEW"],
+    meta: { auto: "task_created", taskId: task.id },
+  });
 
   await logActivity(workspace.id, user.id, "task_created", { taskId: task.id, title: task.title });
   await scheduleDeadlineReminders(task);

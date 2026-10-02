@@ -1,10 +1,12 @@
 // Проверка сайта бизнеса. Фиксирует только то, что видно в HTML главной
 // страницы: адаптив (meta viewport), HTTPS, форма заявки / онлайн-запись,
 // призыв к действию, год в копирайте, платформа, устаревшая вёрстка.
-// С сайта берём только контакты самой компании (email на её домене или на
-// публичной почте, соцсети, телефоны из tel:-ссылок).
+// С сайта берём контакты: все найденные email (какие из них адреса компании,
+// решают правила в contacts/policy.ts), соцсети, телефоны из tel:-ссылок и
+// ссылки на страницу контактов — там email ищется для отобранных лидов.
 
 import { leadsConfig } from "./config";
+import { extractEmails, findContactPages } from "./contacts/extract";
 import { decodeHtml, fetchPublicPage, UnsafeUrlError } from "./http";
 import { classifyUrl, normalizePhone, uniq, mergeSocials } from "./normalize";
 import type { SiteAudit, SocialLink } from "./types";
@@ -36,16 +38,10 @@ const LEGACY_PLATFORMS = new Set(["uCoz", "Narod"]);
 const CTA_RE =
   /(записат|запись онлайн|онлайн-запис|оставить заявк|оставьте заявк|отправить заявк|заказать|забронир|позвонить|перезвон|получить консультац|рассчитать стоимост|купить)/i;
 
-const FREE_MAIL = new Set([
-  "gmail.com", "yandex.ru", "ya.ru", "yandex.com", "mail.ru", "bk.ru", "list.ru", "inbox.ru",
-  "rambler.ru", "icloud.com", "outlook.com", "hotmail.com",
-]);
-
 export type HtmlFacts = Omit<SiteAudit, "url" | "checkedAt" | "status" | "httpStatus" | "error">;
 
 /** Разбор HTML главной страницы. Чистая функция — покрыта тестами. */
 export function analyzeHtml(html: string, finalUrl: string, now = new Date()): HtmlFacts {
-  const siteDomain = new URL(finalUrl).hostname.toLowerCase().replace(/^www\./, "");
   const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ");
 
   const hasViewport = /<meta[^>]+name\s*=\s*["']?viewport/i.test(html);
@@ -76,7 +72,8 @@ export function analyzeHtml(html: string, finalUrl: string, now = new Date()): H
     copyrightYear: findCopyrightYear(text, now),
     platform,
     outdated,
-    emails: extractEmails(html, siteDomain),
+    emails: extractEmails(html),
+    contactPages: findContactPages(html, finalUrl),
     socials: extractSocials(html),
     phones: extractPhones(html),
   };
@@ -90,20 +87,6 @@ export function findCopyrightYear(text: string, now = new Date()): number | null
     for (const y of years) if (y <= now.getFullYear() && (best === null || y > best)) best = y;
   }
   return best;
-}
-
-function extractEmails(html: string, siteDomain: string): string[] {
-  const found = html.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi) ?? [];
-  const emails = found
-    // в ссылках mailto: бывает закодированный пробел (%20info@…) — убираем такие хвосты у имени ящика
-    .map((e) => e.toLowerCase().replace(/^mailto:/, "").replace(/^(?:%[0-9a-f]{2})+/, "").replace(/^[^a-z0-9]+/, ""))
-    .filter((e) => !/\.(png|jpe?g|gif|webp|svg|css|js)$/.test(e))
-    .filter((e) => {
-      const domain = e.split("@")[1] ?? "";
-      // только почта самой компании: на её домене или на публичном почтовике
-      return domain === siteDomain || domain.endsWith(`.${siteDomain}`) || FREE_MAIL.has(domain);
-    });
-  return uniq(emails).slice(0, 3);
 }
 
 function extractSocials(html: string): SocialLink[] {
@@ -165,6 +148,11 @@ export async function auditWebsite(url: string, now = new Date()): Promise<SiteA
     // код ошибки бывает у самой ошибки (наша DNS-проверка) или в cause (fetch)
     const e = err as Error & { code?: string; cause?: { code?: string } };
     const code = e.name === "TimeoutError" || e.name === "AbortError" ? "timeout" : e.code ?? e.cause?.code ?? e.message;
-    return { ...base, status: "unreachable", error: unreachableReason(code) };
+    // «Не открывается» утверждаем только когда сайта точно нет (домен не найден,
+    // сервер отказывает). Таймаут и ошибка сертификата бывают из-за нашей сети
+    // (VPN, блокировка зарубежных адресов, сертификаты Минцифры) — в браузере
+    // клиента сайт может работать, поэтому это «не удалось проверить».
+    const certain = /ENOTFOUND|ECONNREFUSED/.test(code);
+    return { ...base, status: certain ? "unreachable" : "blocked", error: unreachableReason(code) };
   }
 }

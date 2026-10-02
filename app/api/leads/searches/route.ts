@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { toSearchDTO } from "@/lib/leads/dto";
-import { startSearchJob } from "@/lib/leads/jobs";
+import { startSearchJob, type StartSearchParams } from "@/lib/leads/jobs";
 import { getSearch, listSearches } from "@/lib/leads/repository";
 import { leadsAuth, leadsError, notFound } from "@/lib/leads/route-helpers";
 
@@ -26,7 +26,8 @@ const startSchema = z.union([
     city: z.string().trim().min(2).max(60),
     requested: z.number().int().min(1).max(30),
     extra: z.string().trim().max(300).nullish(),
-    osmOnly: z.boolean().optional(),
+    /** osm — основной источник; yandex — тестовая интеграция (нужен ключ). */
+    source: z.enum(["osm", "yandex"]).optional(),
   }),
   // «Найти ещё» / «Повторить» по существующему поиску
   z.object({ fromSearchId: z.string().min(1), mode: z.enum(["more", "retry"]) }),
@@ -39,7 +40,7 @@ export async function POST(request: Request) {
     const { user, workspace } = await leadsAuth(request);
     const body = startSchema.parse(await request.json());
 
-    let params;
+    let params: Omit<StartSearchParams, "workspaceId" | "userId" | "chatId">;
     if ("fromSearchId" in body) {
       const prev = await getSearch(body.fromSearchId, workspace.id);
       if (!prev) return notFound();
@@ -48,11 +49,11 @@ export async function POST(request: Request) {
         city: prev.city,
         requested: prev.requested,
         extra: prev.extra,
-        osmOnly: prev.osmOnly,
+        source: prev.source === "yandex" ? "yandex" : "osm",
         parent: body.mode === "more" ? prev : null,
       };
     } else {
-      params = { niche: body.niche, city: body.city, requested: body.requested, extra: body.extra || null, osmOnly: !!body.osmOnly };
+      params = { niche: body.niche, city: body.city, requested: body.requested, extra: body.extra || null, source: body.source ?? "osm" };
     }
 
     const result = await startSearchJob({ workspaceId: workspace.id, userId: user.id, chatId: null, ...params });

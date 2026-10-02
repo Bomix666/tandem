@@ -35,13 +35,13 @@ export function SearchSheet({ open, meta, onClose, onStarted }: Props) {
     setExtraChips((prev) => (prev.includes(chip) ? prev.filter((c) => c !== chip) : [...prev, chip]));
   }
 
-  async function start(osmOnly: boolean) {
+  async function start(source: "osm" | "yandex") {
     if (niche.trim().length < 2) return showToast("Укажите нишу");
     if (city.trim().length < 2) return showToast("Укажите город");
     haptic("medium");
     setSubmitting(true);
     try {
-      const search = await leadsApi.startSearch({ niche: niche.trim(), city: city.trim(), requested: count, extra: extra || null, osmOnly });
+      const search = await leadsApi.startSearch({ niche: niche.trim(), city: city.trim(), requested: count, extra: extra || null, source });
       onStarted(search);
       onClose();
     } catch (err) {
@@ -117,28 +117,24 @@ export function SearchSheet({ open, meta, onClose, onStarted }: Props) {
               ))}
           </div>
 
-          {yandex ? (
-            <>
-              <div className="note info" style={{ marginTop: 0 }}>
-                Источник: Яндекс Карты{osm ? " + проверка по OpenStreetMap" : ""}. Сайты бизнесов проверяются автоматически.
-              </div>
-              <button className="primary-btn" style={{ marginTop: 14 }} onClick={() => start(false)} disabled={submitting}>
-                {submitting ? "Запускаю…" : "🔎 Начать поиск"}
-              </button>
-            </>
+          {osm ? (
+            <div className="note info" style={{ marginTop: 0 }}>
+              Источник: OpenStreetMap — вся Россия, любой город или регион. Сайты проверяются автоматически, email ищется на сайтах компаний.
+            </div>
           ) : (
-            <>
-              <div className="note warn" style={{ marginTop: 0 }}>
-                <b>⚠️ Поиск клиентов пока не настроен.</b>
-                {"\n"}Нужен ключ Яндекс «API Поиска по организациям» (YANDEX_PLACES_API_KEY в .env).
-                {osm && "\nМожно искать только по OpenStreetMap — данных меньше, а его публичные серверы бывают перегружены."}
-              </div>
-              {osm && (
-                <button className="primary-btn" style={{ marginTop: 14 }} onClick={() => start(true)} disabled={submitting}>
-                  {submitting ? "Запускаю…" : "🗺 Искать только по OpenStreetMap"}
-                </button>
-              )}
-            </>
+            <div className="note warn" style={{ marginTop: 0 }}>
+              OpenStreetMap выключен (LEADS_OSM_ENABLED=false).
+            </div>
+          )}
+          {osm && (
+            <button className="primary-btn" style={{ marginTop: 14 }} onClick={() => start("osm")} disabled={submitting}>
+              {submitting ? "Запускаю…" : "🔎 Начать поиск"}
+            </button>
+          )}
+          {yandex && (
+            <button className="ghost-btn" onClick={() => start("yandex")} disabled={submitting}>
+              🧪 Искать через Яндекс (тест)
+            </button>
           )}
         </div>
       </div>

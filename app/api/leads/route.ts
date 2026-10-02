@@ -6,7 +6,7 @@ import { leadsAuth, leadsError } from "@/lib/leads/route-helpers";
 // ответы зависят от пользователя (Telegram initData) — никакого статического рендера
 export const dynamic = "force-dynamic";
 
-const FILTERS: LeadFilter[] = ["a", "f", "n", "t", "g", "c", "r"];
+const FILTERS: LeadFilter[] = ["a", "f", "d", "n", "t", "g", "c", "r"];
 const PAGE_SIZE = 20;
 
 // GET /api/leads?filter=a&q=барбер&page=0 — «Мои лиды»: фильтр по статусу + поиск по названию.

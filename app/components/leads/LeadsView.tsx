@@ -103,10 +103,10 @@ export function LeadsView({ searchOpen, onSearchOpenChange }: { searchOpen: bool
               <div className="ctitle">Найти клиентов на сайты</div>
               <div className="csub">
                 Небольшие бизнесы без сайта или с устаревшим сайтом — с контактами, оценкой и готовым текстом предложения.
-                {meta && !meta.yandex && (
+                {meta && !meta.osm && (
                   <>
                     <br />
-                    <span style={{ color: "var(--amber)" }}>⚠️ Яндекс не подключён — пока доступен только поиск по OpenStreetMap.</span>
+                    <span style={{ color: "var(--amber)" }}>⚠️ OpenStreetMap выключен (LEADS_OSM_ENABLED=false).</span>
                   </>
                 )}
               </div>

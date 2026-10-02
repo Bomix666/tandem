@@ -3,7 +3,8 @@ import { z } from "zod";
 import { isYandexConfigured, leadsConfig } from "@/lib/leads/config";
 import { toSearchDTO } from "@/lib/leads/dto";
 import { CITY_PRESETS, NICHE_PRESETS } from "@/lib/leads/niches";
-import { getProposalGenerator } from "@/lib/leads/proposal";
+import { getOutreachGenerator } from "@/lib/leads/outreach";
+import { osmLocalStatus } from "@/lib/leads/providers/osm-local";
 import { getActiveSearch, getLeadStats, setAvgCheck } from "@/lib/leads/repository";
 import { leadsAuth, leadsError } from "@/lib/leads/route-helpers";
 import type { LeadsMetaDTO } from "@/types/leads";
@@ -12,11 +13,16 @@ import type { LeadsMetaDTO } from "@/types/leads";
 export const dynamic = "force-dynamic";
 
 async function buildMeta(workspaceId: string): Promise<LeadsMetaDTO> {
-  const [stats, active] = await Promise.all([getLeadStats(workspaceId), getActiveSearch(workspaceId)]);
+  const [stats, active, osmStatus] = await Promise.all([
+    getLeadStats(workspaceId),
+    getActiveSearch(workspaceId),
+    osmLocalStatus().catch(() => "состояние неизвестно"),
+  ]);
   return {
     yandex: isYandexConfigured(),
     osm: leadsConfig.osmEnabled,
-    proposalLabel: getProposalGenerator().generator.label,
+    osmStatus,
+    proposalLabel: getOutreachGenerator().generator.label,
     niches: NICHE_PRESETS.map((n) => n.label),
     cities: CITY_PRESETS,
     stats,

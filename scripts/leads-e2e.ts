@@ -13,7 +13,7 @@ import { execSync, spawn, type ChildProcess } from "node:child_process";
 import http from "node:http";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import { fakeSourcesEnv, handleFakeSource, startAltSiteServer, type FakeSourcesState } from "./lib/fake-sources";
+import { fakeSourcesEnv, handleFakeSource, seedLocalOsm, startAltSiteServer, type FakeSourcesState } from "./lib/fake-sources";
 
 const E2E_DB = process.env.E2E_DATABASE_URL ?? "postgresql://postgres:tandem@localhost:5432/tandem_e2e?schema=public";
 const TOKEN = "123456:E2E-TEST-TOKEN";
@@ -292,23 +292,34 @@ async function main() {
     check("«📋 Задачи» = /tasks", tasksMsg.text.includes("АКТИВНЫХ: 2"), tasksMsg.text);
 
     // ===== поиск клиентов =====
-    const s1 = await runWizard({ nicheButton: "Барбершопы", city: "Москва", count: "5", start: "✅ Начать поиск" });
-    check("мастер: подтверждение с источниками", s1.confirmText.includes("Источник: Яндекс Карты + проверка по OpenStreetMap"), s1.confirmText);
+    // Яндекс — тестовая интеграция (кнопка 🧪); локальной копии OSM пока нет — дополнение идёт через Overpass
+    const s1 = await runWizard({ nicheButton: "Барбершопы", city: "Москва", count: "5", start: "🧪 Искать через Яндекс (тест)" });
+    check("мастер: основной источник — OpenStreetMap, Яндекс — тест", s1.confirmText.includes("Источник: 🗺 OpenStreetMap"), s1.confirmText);
     check("поиск в фоне: было сообщение о прогрессе", calls.slice(s1.mark).some((c) => String(c.body.text ?? "").includes("Ищу подходящие бизнесы")));
-    check("итог поиска: 5 лидов", s1.summary.text.includes("<b>5 лидов</b>"), s1.summary.text);
+    check("итог поиска: 5 подходят", s1.summary.text.includes("<b>5 подходят</b>"), s1.summary.text);
+    check("итог: воронка «бизнесов · подходят · с email»", /\d+ бизнес\S* · <b>5 подходят<\/b> · \d+ с публичным email/.test(s1.summary.text), s1.summary.text);
     check("итог: разбивка по потенциалу", /🔥 Высокий потенциал: 2[\s\S]*🟡 Средний: 3/.test(s1.summary.text), s1.summary.text);
     // бизнес без контактов стоит в конце очереди — 5 лидов набираются раньше, лишних проверок нет
     check("итог: проверено 5, без лишних проверок", s1.summary.text.includes("Проверено: 5 · Отфильтровано: 0"), s1.summary.text);
 
     const leads1 = await prisma.lead.findMany({ where: { workspaceId: ws.id } });
     check("в БД 5 лидов", leads1.length === 5, String(leads1.length));
+    check("новые лиды — статус «🔎 Найден»", leads1.every((l) => l.status === "FOUND"), leads1.map((l) => l.status).join());
+    check("история: событие FOUND у каждого лида", (await prisma.leadEvent.count({ where: { workspaceId: ws.id, type: "FOUND" } })) === 5);
     const black = leads1.find((l) => l.name === "Black Barber");
     check("OSM дополнил лид: email и Instagram", !!black && black.emails.includes("hello@blackbarber.ru") && JSON.stringify(black.socials).includes("instagram.com/blackbarber"));
+    const blackContact = black ? await prisma.leadContact.findFirst({ where: { leadId: black.id } }) : null;
+    check(
+      "email из OSM: источник и проверка 🟡 (домен не совпадает с сайтом)",
+      blackContact?.sourceType === "OSM" && blackContact.verification === "UNVERIFIED" && blackContact.isPrimary,
+      JSON.stringify(blackContact)
+    );
     check("лид без контактов не сохранён", !leads1.some((l) => l.name === "Ghost Barber"));
     check("сеть помечена", leads1.filter((l) => l.name === "Barber Chain").every((l) => JSON.stringify(l.scoreReasons).includes("похоже на сеть")));
 
     const card1 = await waitMessage(s1.mark, (m) => m.text.includes("ЛИД #1"), "первая карточка");
     check("карточка #1 — лучший лид (Black Barber, 95/100)", card1.text.includes("Black Barber") && card1.text.includes("95/100"), card1.text.slice(0, 200));
+    check("карточка: email с отметкой проверки и источником", card1.text.includes("🟡 hello@blackbarber.ru — найден, не подтверждён · <a href="), card1.text);
     check("карточка: кнопки из ТЗ", ["🌐 Сайт", "📱 Соцсети", "📞 Контакты", "✨ Создать предложение", "➕ Создать задачу", "❤️ Сохранить лид", "➡️ Следующий"].every((t) => buttons(card1.message_id).some((b) => b.text === t)));
 
     mark = calls.length;
@@ -323,6 +334,8 @@ async function main() {
     await waitMessage(mark, (m) => m.message_id === card1.message_id && buttons(m.message_id).some((b) => b.text === "💔 Убрать из сохранённых"), "сохранение");
     const savedLead = await prisma.lead.findFirst({ where: { workspaceId: ws.id, saved: true } });
     check("❤️ Сохранить лид", !!savedLead);
+    check("сохранение берёт лид в работу: 🔎 Найден → 🆕 Новый", savedLead?.status === "NEW", savedLead?.status);
+    check("история: событие SAVED", (await prisma.leadEvent.count({ where: { leadId: savedLead?.id, type: "SAVED", fromStatus: "FOUND", toStatus: "NEW" } })) === 1);
     const card2Lead = savedLead!;
 
     // статус
@@ -333,6 +346,7 @@ async function main() {
     press(card1.message_id, /Переговоры$/);
     const afterStatus = await waitMessage(mark, (m) => m.message_id === card1.message_id && m.text.includes("📌 Статус: 🤝 Переговоры"), "статус в карточке");
     check("статус меняется из Telegram", (await prisma.lead.findUnique({ where: { id: card2Lead.id } }))?.status === "NEGOTIATION");
+    check("история: смена статуса записана", (await prisma.leadEvent.count({ where: { leadId: card2Lead.id, type: "STATUS_CHANGED", toStatus: "NEGOTIATION" } })) === 1);
     check("после смены статуса «Следующий» сохранился", buttons(afterStatus.message_id).some((b) => b.text === "➡️ Следующий"));
 
     // предложение
@@ -342,6 +356,9 @@ async function main() {
     check("✨ предложение по фактам лида", proposal.text.includes("Обратил внимание на ваш барбершоп") && !proposal.text.includes("@"), proposal.text);
     check("предложение сохранено в лиде", !!(await prisma.lead.findUnique({ where: { id: card2Lead.id } }))?.proposal);
     check("пометка «шаблон, AI не подключён»", calls.slice(mark).some((c) => String(c.body.text ?? "").includes("AI не подключён")));
+    const draft1 = await prisma.outreach.findFirst({ where: { leadId: card2Lead.id } });
+    check("предложение = черновик обращения (Outreach DRAFT), ничего не отправлено", draft1?.status === "DRAFT" && draft1.channel === "EMAIL" && !draft1.sentAt, JSON.stringify(draft1));
+    check("история: OUTREACH_DRAFTED", (await prisma.leadEvent.count({ where: { leadId: card2Lead.id, type: "OUTREACH_DRAFTED" } })) === 1);
 
     // задача из лида
     mark = calls.length;
@@ -352,6 +369,8 @@ async function main() {
     check("в задаче все данные лида", !!leadTasks[0]?.task.description?.includes("Тип: Продажа сайта") && !!leadTasks[0]?.task.description?.includes("Статус лида: Переговоры"));
     check("задача видна в общем списке задач", (await prisma.task.count({ where: { workspaceId: ws.id } })) === 3);
     check("в ленте активности есть запись", (await prisma.taskActivity.count({ where: { workspaceId: ws.id, type: "task_created" } })) === 1);
+    check("задача не откатывает лид назад по воронке (Переговоры остаются)", (await prisma.lead.findUnique({ where: { id: card2Lead.id } }))?.status === "NEGOTIATION");
+    check("связь лид ↔ задача: тип CONTACT, событие TASK_CREATED", leadTasks[0]?.kind === "CONTACT" && (await prisma.leadEvent.count({ where: { leadId: card2Lead.id, type: "TASK_CREATED" } })) === 1);
 
     mark = calls.length;
     press(card1.message_id, "✅ Задача есть");
@@ -369,10 +388,11 @@ async function main() {
     check("📞 Контакты", contacts.text.includes("Телефон:") && contacts.text.includes("Email:"));
 
     // ===== дубли =====
-    const s2 = await runWizard({ nicheButton: "Барбершопы", city: "Москва", count: "5", start: "✅ Начать поиск" });
+    const s2 = await runWizard({ nicheButton: "Барбершопы", city: "Москва", count: "5", start: "🧪 Искать через Яндекс (тест)" });
     check("повторный поиск: дубли не создаются", (await prisma.lead.count({ where: { workspaceId: ws.id } })) === 5);
     check("повторный поиск: «Уже были в базе: 5»", s2.summary.text.includes("Уже были в базе: 5"), s2.summary.text);
     check("статус и «сохранён» у дубля не сброшены", (await prisma.lead.findUnique({ where: { id: card2Lead.id } }))?.status === "NEGOTIATION");
+    check("повторный поиск: email-контакты не задвоились", (await prisma.leadContact.count({ where: { leadId: black!.id } })) === 1);
 
     // ===== найти ещё =====
     mark = calls.length;
@@ -393,18 +413,18 @@ async function main() {
     // ===== ошибки источников =====
     state.osmMode = "500";
     mark = calls.length;
-    const s4 = await runWizard({ nicheButton: "Барбершопы", city: "Казань", count: "5", start: "✅ Начать поиск" });
-    check("OSM недоступен: предупреждение и поиск продолжился", s4.summary.text.includes("Не удалось получить данные из OpenStreetMap") && s4.summary.text.includes("<b>2 лида</b>"), s4.summary.text);
+    const s4 = await runWizard({ nicheButton: "Барбершопы", city: "Казань", count: "5", start: "🧪 Искать через Яндекс (тест)" });
+    check("OSM недоступен: предупреждение и поиск продолжился", s4.summary.text.includes("Не удалось получить данные из OpenStreetMap") && s4.summary.text.includes("<b>2 подходят</b>"), s4.summary.text);
     check("во время поиска было предупреждение", calls.slice(mark).some((c) => String(c.body.text ?? "").includes("Продолжаю поиск")));
     state.osmMode = "ok";
 
     state.yandexMode = "403";
-    const s5 = await runWizard({ nicheButton: "Барбершопы", city: "Москва", count: "5", start: "✅ Начать поиск" });
+    const s5 = await runWizard({ nicheButton: "Барбершопы", city: "Москва", count: "5", start: "🧪 Искать через Яндекс (тест)" });
     check("Яндекс вернул ошибку: переход на OSM с предупреждением", s5.summary.text.includes("Не удалось получить данные из Яндекса") && s5.summary.text.includes("Источник: OpenStreetMap"), s5.summary.text);
     state.yandexMode = "ok";
 
     // ===== «Дополнительно» как фильтр =====
-    const s6 = await runWizard({ nicheButton: "Барбершопы", city: "Москва", count: "5", extra: "только без сайта", start: "✅ Начать поиск" });
+    const s6 = await runWizard({ nicheButton: "Барбершопы", city: "Москва", count: "5", extra: "только без сайта", start: "🧪 Искать через Яндекс (тест)" });
     check("«Дополнительно: без сайта» распознано", s6.confirmText.includes("Учту: только бизнесы без собственного сайта"), s6.confirmText);
     const s6search = await prisma.leadSearch.findFirst({ where: { workspaceId: ws.id, extra: "только без сайта" }, include: { results: { include: { lead: true } } } });
     check("фильтр «без сайта» соблюдён", !!s6search && s6search.results.every((r) => r.lead.websiteKind !== "own"));
@@ -452,6 +472,18 @@ async function main() {
     await waitMessage(mark, (m) => m.text.includes("Средний чек:"), "средний чек сохранён");
     check("⚙️ средний чек сохраняется", (await prisma.leadSettings.findUnique({ where: { workspaceId: ws.id } }))?.avgCheck === 75000);
 
+    mark = calls.length;
+    sendText("⚙️ Настройки");
+    const settings = await waitMessage(mark, (m) => m.text.includes("НАСТРОЙКИ ПОИСКА КЛИЕНТОВ"), "настройки");
+    check("⚙️ Настройки: OpenStreetMap — основной источник, Яндекс — тест", settings.text.includes("OpenStreetMap (основной)") && settings.text.includes("Яндекс Карты (тест)"), settings.text);
+    mark = calls.length;
+    press(settings.message_id, "✏️ Имя");
+    await waitMessage(mark, (m) => m.text.includes("Как тебя зовут"), "запрос имени");
+    mark = calls.length;
+    sendText("Никита");
+    await waitMessage(mark, (m) => m.text.includes("Имя: Никита"), "имя в настройках");
+    check("⚙️ подпись: имя сохраняется", (await prisma.leadSettings.findUnique({ where: { workspaceId: ws.id } }))?.senderName === "Никита");
+
     // ===== Яндекс не настроен =====
     await stopBot();
     startBot(false);
@@ -466,20 +498,77 @@ async function main() {
     press(st3.message_id, "5");
     const st4 = await waitMessage(mark, (m) => m.text.includes("Шаг 4/4"), "шаг 4");
     press(st4.message_id, "Пропустить");
-    const nc = await waitMessage(mark, (m) => m.text.includes("пока не настроен"), "не настроено");
-    check("без ключа Яндекса — «⚠️ Поиск клиентов пока не настроен»", !buttons(nc.message_id).some((b) => b.text === "✅ Начать поиск"));
-    // OSM лежит → понятная ошибка и кнопка «Повторить»; OSM ожил → повтор проходит
+    const nc = await waitMessage(mark, (m) => m.text.includes("Количество:") && !m.text.includes("Шаг"), "подтверждение без ключа");
+    check("без ключа Яндекса — поиск по OSM доступен, кнопки 🧪 нет", buttons(nc.message_id).some((b) => b.text === "✅ Начать поиск") && !buttons(nc.message_id).some((b) => b.text.includes("Яндекс")));
+    // локальной копии OSM нет, Overpass лежит → понятная ошибка и кнопка «Повторить»; OSM ожил → повтор проходит
     state.osmMode = "500";
     let m2 = calls.length;
-    press(nc.message_id, "🗺 Искать только по OpenStreetMap");
+    press(nc.message_id, "✅ Начать поиск");
     const failed = await waitMessage(m2, (m) => m.text.includes("Поиск не выполнен"), "OSM недоступен", 30000);
-    check("OSM недоступен — понятная ошибка без технического мусора", failed.text.includes("OpenStreetMap сейчас не отвечает") && !failed.text.includes("&lt;?xml"), failed.text);
+    check("OSM недоступен — понятная ошибка без технического мусора", failed.text.includes("Не удалось выполнить поиск по OpenStreetMap") && !failed.text.includes("&lt;?xml"), failed.text);
     check("у неудачного поиска кнопка «🔁 Повторить поиск»", buttons(failed.message_id).some((b) => b.text === "🔁 Повторить поиск"));
     state.osmMode = "ok";
     m2 = calls.length;
     press(failed.message_id, "🔁 Повторить поиск");
     const osmOnly = await waitMessage(m2, (m) => m.text.includes("Поиск завершён"), "повтор поиска только по OSM", 30000);
     check("поиск только по OSM работает без ключа (после повтора)", osmOnly.text.includes("Источник: OpenStreetMap"), osmOnly.text);
+    check("пока локальной копии нет — пометка «через публичные серверы»", osmOnly.text.includes("Локальная копия OpenStreetMap ещё загружается"), osmOnly.text);
+
+    // ===== локальная копия OSM: граница города, email со страницы «Контакты» =====
+    await seedLocalOsm(prisma);
+    state.osmMode = "500"; // публичный Overpass «лежит» — поиск не должен в него ходить
+    const s7 = await runWizard({ nicheButton: "Барбершопы", city: "Москва", count: "5", start: "✅ Начать поиск" });
+    check("локальный OSM: поиск без Overpass", s7.summary.text.includes("Поиск завершён") && !s7.summary.text.includes("ещё загружается"), s7.summary.text);
+    check(
+      "итог: 2 бизнеса в границах города · 1 подходит · 1 с email · 1 требует проверки",
+      s7.summary.text.includes("2 бизнеса · <b>1 подходит</b> · 1 с публичным email · 1 требует проверки"),
+      s7.summary.text
+    );
+    check("прогресс: «Найдено бизнесов / Подходят / 📧 Email найден»", calls.slice(s7.mark).some((c) => /Найдено бизнесов: \d+[\s\S]*Подходят: \d+\/5[\s\S]*📧 Email найден: \d+/.test(String(c.body.text ?? ""))));
+    state.osmMode = "ok";
+    const lavka = await prisma.lead.findFirst({ where: { workspaceId: ws.id, osmId: "node/101" }, include: { contacts: true } });
+    check("за границей города и не из ниши — не найдены", !(await prisma.lead.count({ where: { osmId: { in: ["node/102", "node/103"] } } })));
+    check(
+      "email найден на странице «Контакты»: info@ 🟡, мёртвый домен 🔴, личный — не сохранён",
+      !!lavka &&
+        lavka.contacts.length === 2 &&
+        lavka.contacts.some((c) => c.value === "info@lavka-barber.ru" && c.verification === "UNVERIFIED" && c.sourceType === "SITE" && !!c.sourceUrl?.endsWith("/site/lavka/kontakty")) &&
+        lavka.contacts.some((c) => c.value === "zakaz@lavkabarber.com" && c.verification === "INVALID") &&
+        !lavka.contacts.some((c) => c.value.includes("ivan")),
+      JSON.stringify(lavka?.contacts.map((c) => [c.value, c.verification, c.sourceType]))
+    );
+    check("Lead.emails — только пригодные адреса", lavka?.emails.join() === "info@lavka-barber.ru", lavka?.emails.join());
+    const lavkaCard = await waitMessage(s7.mark, (m) => m.text.includes("Lavka Barber") && m.text.includes("ЛИД #1"), "карточка Lavka");
+    check(
+      "карточка: 🟡 и 🔴 email с источником «сайт компании»",
+      lavkaCard.text.includes("🟡 info@lavka-barber.ru — найден, не подтверждён · <a href=") && lavkaCard.text.includes("🔴 zakaz@lavkabarber.com — некорректный"),
+      lavkaCard.text
+    );
+    check("карточка: статус «🔎 Найден»", lavkaCard.text.includes("📌 Статус: 🔎 Найден"), lavkaCard.text);
+
+    mark = calls.length;
+    press(lavkaCard.message_id, "✨ Создать предложение");
+    const lavkaHead = await waitMessage(mark, (m) => m.text.includes("Предложение для «Lavka Barber»"), "предложение Lavka");
+    const lavkaText = await waitMessage(mark, (m) => m.text.startsWith("Здравствуйте!"), "текст Lavka");
+    check("предложение: адресат — лучший проверенный email, тема письма", lavkaHead.text.includes("Кому: 🟡 info@lavka-barber.ru") && lavkaHead.text.includes("Тема:"), lavkaHead.text);
+    check("предложение: подпись из настроек", lavkaText.text.endsWith("—\nНикита"), lavkaText.text);
+    const lavkaDraft = await prisma.outreach.findFirst({ where: { leadId: lavka!.id }, include: { contact: true } });
+    check("Outreach связан с email-контактом", lavkaDraft?.recipient === "info@lavka-barber.ru" && lavkaDraft.contact?.value === "info@lavka-barber.ru" && lavkaDraft.status === "DRAFT");
+
+    mark = calls.length;
+    press(lavkaCard.message_id, "➕ Создать задачу");
+    await waitMessage(mark, (m) => m.text.includes("Задача создана"), "задача Lavka");
+    const lavkaAfter = await prisma.lead.findUniqueOrThrow({ where: { id: lavka!.id } });
+    check("задача → лид автоматически «📩 Связаться», без отправки", lavkaAfter.status === "TO_CONTACT" && !(await prisma.outreach.count({ where: { leadId: lavka!.id, status: { not: "DRAFT" } } })));
+    check(
+      "история: TASK_CREATED и STATUS_CHANGED FOUND → TO_CONTACT",
+      (await prisma.leadEvent.count({ where: { leadId: lavka!.id, type: "TASK_CREATED" } })) === 1 &&
+        (await prisma.leadEvent.count({ where: { leadId: lavka!.id, type: "STATUS_CHANGED", fromStatus: "FOUND", toStatus: "TO_CONTACT" } })) === 1
+    );
+    const lavkaTask = await prisma.leadTask.findFirst({ where: { leadId: lavka!.id }, include: { task: true } });
+    check("в описании задачи email с отметкой проверки", !!lavkaTask?.task.description?.includes("info@lavka-barber.ru 🟡"), lavkaTask?.task.description ?? "");
+    const reCard = await waitMessage(mark, (m) => m.message_id === lavkaCard.message_id && m.text.includes("📌 Статус: 📩 Связаться"), "карточка обновилась");
+    check("карточка обновилась: «📩 Связаться» · есть задача", reCard.text.includes("✅ есть задача"));
 
     // ===== старые команды после всего =====
     mark = calls.length;

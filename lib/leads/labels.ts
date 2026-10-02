@@ -1,6 +1,6 @@
 // Подписи статусов и потенциала — общие для бота и описаний задач.
 
-import type { LeadStatus } from "@prisma/client";
+import type { ContactSource, EmailCheck, LeadStatus } from "@prisma/client";
 import type { Potential, ScoreReason, SiteAudit } from "./types";
 
 /** Проблемы сайта, найденные проверкой, — короткими фразами для карточки. */
@@ -18,6 +18,7 @@ export function siteIssues(audit: SiteAudit | null | undefined, now = new Date()
 export const SOURCE_LABELS: Record<string, string> = { yandex: "Яндекс Карты", osm: "OpenStreetMap" };
 
 export const LEAD_STATUS_ORDER: LeadStatus[] = [
+  "FOUND",
   "NEW",
   "TO_CONTACT",
   "CONTACTED",
@@ -29,6 +30,7 @@ export const LEAD_STATUS_ORDER: LeadStatus[] = [
 ];
 
 export const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
+  FOUND: "Найден",
   NEW: "Новый",
   TO_CONTACT: "Связаться",
   CONTACTED: "Написали",
@@ -40,6 +42,7 @@ export const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
 };
 
 export const LEAD_STATUS_EMOJI: Record<LeadStatus, string> = {
+  FOUND: "🔎",
   NEW: "🆕",
   TO_CONTACT: "📩",
   CONTACTED: "💬",
@@ -51,6 +54,20 @@ export const LEAD_STATUS_EMOJI: Record<LeadStatus, string> = {
 };
 
 export const statusText = (s: LeadStatus) => `${LEAD_STATUS_EMOJI[s]} ${LEAD_STATUS_LABELS[s]}`;
+
+export const EMAIL_CHECK_LABELS: Record<EmailCheck, string> = {
+  VALID: "Подтверждён",
+  UNVERIFIED: "Найден, не подтверждён",
+  INVALID: "Некорректный",
+};
+export const EMAIL_CHECK_EMOJI: Record<EmailCheck, string> = { VALID: "🟢", UNVERIFIED: "🟡", INVALID: "🔴" };
+
+export const CONTACT_SOURCE_LABELS: Record<ContactSource, string> = {
+  OSM: "OpenStreetMap",
+  YANDEX: "Яндекс Карты",
+  SITE: "сайт компании",
+  MANUAL: "добавлен вручную",
+};
 
 export const POTENTIAL_LABELS: Record<Potential, string> = { HIGH: "Высокий", MEDIUM: "Средний", LOW: "Низкий" };
 export const POTENTIAL_EMOJI: Record<Potential, string> = { HIGH: "🔥", MEDIUM: "🟡", LOW: "⚪" };

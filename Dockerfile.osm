@@ -1,0 +1,19 @@
+# syntax=docker/dockerfile:1
+# Импорт локальной копии OpenStreetMap (scripts/osm-import.ts). Нужен osmium-tool,
+# которого нет в alpine-репозиториях стабильной версии — поэтому debian-slim.
+
+FROM node:20-bookworm-slim
+WORKDIR /app
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends osmium-tool openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json* ./
+RUN npm ci --ignore-scripts
+
+COPY . .
+ENV DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/placeholder"
+RUN npx prisma generate
+
+# миграции — на случай, если импорт стартует раньше приложения (prisma берёт блокировку)
+CMD ["sh", "-c", "npx prisma migrate deploy && npx tsx scripts/osm-import.ts --loop"]

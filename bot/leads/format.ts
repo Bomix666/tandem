@@ -10,6 +10,9 @@
 import type { LeadSearch, LeadStatus } from "@prisma/client";
 import { InlineKeyboard } from "grammy";
 import {
+  CONTACT_SOURCE_LABELS,
+  EMAIL_CHECK_EMOJI,
+  EMAIL_CHECK_LABELS,
   formatScoreReasons,
   LEAD_STATUS_EMOJI,
   LEAD_STATUS_LABELS,
@@ -96,6 +99,19 @@ function siteLine(lead: LeadWithTasks): string {
   return "❌ Не найден";
 }
 
+/** Email с проверкой и источником: «🟢 info@site.ru — подтверждён · сайт компании». */
+export function emailLines(lead: LeadWithTasks): string[] {
+  const contacts = lead.contacts ?? [];
+  if (!contacts.length) return lead.emails.length ? lead.emails.map(e) : ["Не найден"];
+  return contacts.map((c) => {
+    const check = c.verification ? `${EMAIL_CHECK_EMOJI[c.verification]} ` : "";
+    const label = c.verification ? ` — ${EMAIL_CHECK_LABELS[c.verification].toLowerCase()}` : "";
+    const source = CONTACT_SOURCE_LABELS[c.sourceType];
+    const from = c.sourceUrl ? `<a href="${e(c.sourceUrl)}">${source}</a>` : source;
+    return `${check}${e(c.value)}${label} · ${from}`;
+  });
+}
+
 export function renderLeadCard(lead: LeadWithTasks, opts: { number?: number } = {}): string {
   const socials = (lead.socials as unknown as SocialLink[] | null) ?? [];
   const sources = (lead.sources as unknown as SourceRef[] | null) ?? [];
@@ -124,7 +140,7 @@ export function renderLeadCard(lead: LeadWithTasks, opts: { number?: number } = 
     lead.phones.length ? lead.phones.map(e).join(", ") : "Не найден",
     "",
     "📧 <b>Email:</b>",
-    lead.emails.length ? lead.emails.map(e).join(", ") : "Не найден",
+    ...emailLines(lead),
     "",
     `${POTENTIAL_EMOJI[lead.potential]} <b>Потенциал:</b> ${POTENTIAL_LABELS[lead.potential]}`,
     "",
@@ -213,7 +229,7 @@ export const EXTRA_PRESETS: Record<string, string> = {
 };
 
 export function notConfiguredText(): string {
-  return "⚠️ <b>Поиск клиентов пока не настроен.</b>\n\nНеобходимо подключить API поиска бизнесов: ключ Яндекс «API Поиска по организациям» в переменной <code>YANDEX_PLACES_API_KEY</code> (файл .env).";
+  return "⚠️ <b>Яндекс не подключён.</b>\n\nПоиск через Яндекс — тестовая интеграция: нужен ключ «API Поиска по организациям» в переменной <code>YANDEX_PLACES_API_KEY</code> (файл .env). Основной поиск по OpenStreetMap работает без ключа.";
 }
 
 export function wizardConfirmView(d: WizardDraft, opts: { yandex: boolean; osm: boolean }): { text: string; kb: InlineKeyboard } {
@@ -231,16 +247,9 @@ export function wizardConfirmView(d: WizardDraft, opts: { yandex: boolean; osm: 
   if (understood.length) lines.push("", `Учту: ${understood.join("; ")}.`);
   else if (d.extra) lines.push("", "<i>Требование не распознано как фильтр — сохраню его в истории, но отбирать по нему не смогу.</i>");
 
-  if (opts.yandex) {
-    lines.push("", `Источник: Яндекс Карты${opts.osm ? " + проверка по OpenStreetMap" : ""}`);
-    kb.text("✅ Начать поиск", "ld:w:go").row();
-  } else {
-    lines.push("", notConfiguredText());
-    if (opts.osm) {
-      lines.push("", "Можно поискать только по OpenStreetMap (без ключа) — данных будет заметно меньше.");
-      kb.text("🗺 Искать только по OpenStreetMap", "ld:w:osm").row();
-    }
-  }
+  lines.push("", "Источник: 🗺 OpenStreetMap — вся Россия, email ищу на сайтах компаний");
+  kb.text("✅ Начать поиск", "ld:w:go").row();
+  if (opts.yandex) kb.text("🧪 Искать через Яндекс (тест)", "ld:w:ya").row();
   kb.text("✖️ Отмена", "ld:w:x");
   return { text: lines.join("\n"), kb };
 }
@@ -252,9 +261,10 @@ export function progressText(s: Pick<LeadSearch, "niche" | "city">, p: SearchPro
     "🔎 <b>Ищу подходящие бизнесы...</b>",
     `${e(s.niche)} · ${e(s.city)}`,
     "",
-    `Найдено: ${p.found}/${p.target}`,
+    `Найдено бизнесов: ${p.candidates}`,
     `Проверено: ${p.checked}`,
-    `Отфильтровано: ${p.filtered}`,
+    `Подходят: ${p.found}/${p.target}`,
+    `📧 Email найден: ${p.withEmail}`,
   ];
   if (p.stage) lines.push("", `<i>${e(p.stage)}</i>`);
   if (p.warnings.length) lines.push("", ...p.warnings.map(e));
@@ -262,7 +272,10 @@ export function progressText(s: Pick<LeadSearch, "niche" | "city">, p: SearchPro
 }
 
 export function summaryText(
-  s: Pick<LeadSearch, "niche" | "city" | "found" | "checked" | "filtered" | "createdAt" | "parentId" | "warnings" | "status" | "error">,
+  s: Pick<
+    LeadSearch,
+    "niche" | "city" | "found" | "checked" | "filtered" | "candidates" | "withEmail" | "needsReview" | "createdAt" | "parentId" | "warnings" | "status" | "error"
+  >,
   b: { high: number; medium: number; low: number; existing: number },
   extra: { sourceLabel?: string; skippedKnown?: number; fromHistory?: boolean } = {}
 ): string {
@@ -277,9 +290,16 @@ export function summaryText(
     `${e(s.niche)} · ${e(s.city)}${s.parentId ? " · продолжение" : ""}`,
   ];
   if (extra.sourceLabel) lines.push(`Источник: ${extra.sourceLabel}`);
-  lines.push("", "Найдено:", `<b>${leadsWord(s.found)}</b>`);
+  const funnel = [
+    s.candidates ? `${s.candidates} ${plural(s.candidates, ["бизнес", "бизнеса", "бизнесов"])}` : null,
+    `<b>${s.found} ${plural(s.found, ["подходит", "подходят", "подходят"])}</b>`,
+    `${s.withEmail} с публичным email`,
+    s.needsReview ? `${s.needsReview} ${plural(s.needsReview, ["требует", "требуют", "требуют"])} проверки` : null,
+  ].filter(Boolean);
+  lines.push("", funnel.join(" · "));
   if (s.found > 0) {
     lines.push("", `🔥 Высокий потенциал: ${b.high}`, `🟡 Средний: ${b.medium}`, `⚪ Низкий: ${b.low}`);
+    if (s.needsReview) lines.push("", "<i>🟡 — email найден, но не подтверждён (бесплатная почта или другой домен). Проверь перед отправкой.</i>");
   } else {
     lines.push("", "Подходящих бизнесов не нашлось. Попробуй другой город, нишу или «Найти ещё».");
   }
@@ -305,6 +325,7 @@ export function summaryKeyboard(s: Pick<LeadSearch, "id" | "found" | "requested"
 export const FILTER_LABELS: Record<LeadFilter, string> = {
   a: "Все",
   f: "❤️ Сохранённые",
+  d: "🔎 Найденные",
   n: "🆕 Новые",
   t: "📩 Связаться",
   g: "🤝 Переговоры",
@@ -343,6 +364,7 @@ export function myLeadsView(
   const f = (code: LeadFilter, label: string) => kb.text(`${filter === code ? "• " : ""}${label}`, code === "q" ? "ld:mq" : `ld:ml:${code}:0`);
   f("a", "Все");
   f("f", "❤️");
+  f("d", "🔎");
   f("n", "🆕");
   f("t", "📩");
   kb.row();
@@ -412,14 +434,42 @@ export function statsText(s: { total: number; byStatus: Partial<Record<LeadStatu
   ].join("\n");
 }
 
-export function settingsText(s: { avgCheck: number; yandex: boolean; osm: boolean; proposalLabel: string }): string {
+export interface SenderSettings {
+  senderName: string | null;
+  companyName: string | null;
+  portfolioUrl: string | null;
+  senderContact: string | null;
+}
+
+export function settingsText(
+  s: { avgCheck: number; yandex: boolean; osm: boolean; osmLocal: string; proposalLabel: string } & SenderSettings
+): string {
+  const v = (x: string | null) => (x ? e(x) : "<i>не указано</i>");
   return [
     "⚙️ <b>НАСТРОЙКИ ПОИСКА КЛИЕНТОВ</b>",
     "",
     `Средний чек: <b>${formatMoney(s.avgCheck)}</b>`,
     "",
-    `Источник бизнесов — Яндекс Карты: ${s.yandex ? "✅ подключён" : "⚠️ не подключён (нужен YANDEX_PLACES_API_KEY в .env)"}`,
-    `Проверка и дополнение — OpenStreetMap: ${s.osm ? "✅ включено" : "выключено (LEADS_OSM_ENABLED=false)"}`,
+    "✍️ <b>Подпись в предложениях</b>",
+    `Имя: ${v(s.senderName)}`,
+    `Компания / студия: ${v(s.companyName)}`,
+    `Портфолио: ${v(s.portfolioUrl)}`,
+    `Контакт: ${v(s.senderContact)}`,
+    "",
+    "<b>Источники</b>",
+    `🗺 OpenStreetMap (основной): ${s.osm ? `✅ ${e(s.osmLocal)}` : "выключен (LEADS_OSM_ENABLED=false)"}`,
+    `🧪 Яндекс Карты (тест): ${s.yandex ? "ключ подключён" : "не подключён"}`,
     `Тексты предложений: ${s.proposalLabel}`,
   ].join("\n");
+}
+
+export function settingsKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("✏️ Средний чек", "ld:set:avg")
+    .row()
+    .text("✏️ Имя", "ld:set:name")
+    .text("✏️ Компания", "ld:set:company")
+    .row()
+    .text("✏️ Портфолио", "ld:set:portfolio")
+    .text("✏️ Контакт", "ld:set:contact");
 }

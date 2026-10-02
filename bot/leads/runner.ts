@@ -4,7 +4,7 @@
 
 import type { Api, InlineKeyboard } from "grammy";
 import type { LeadSearch } from "@prisma/client";
-import { isSearchBusy, startSearchJob } from "../../lib/leads/jobs";
+import { isSearchBusy, startSearchJob, type LeadSource } from "../../lib/leads/jobs";
 import { getLead, getSearchLeadAt } from "../../lib/leads/repository";
 import type { SearchProgress } from "../../lib/leads/search";
 import { leadCardKeyboard, notConfiguredText, NO_PREVIEW, progressText, renderLeadCard, summaryKeyboard, summaryText, type Nav } from "./format";
@@ -17,14 +17,24 @@ export interface LaunchParams {
   city: string;
   requested: number;
   extra: string | null;
-  osmOnly: boolean;
+  source: LeadSource;
   parent?: LeadSearch;
 }
 
 export async function launchSearch(api: Api, p: LaunchParams): Promise<"started" | "busy" | "not_configured"> {
   if (await isSearchBusy(p.workspaceId)) return "busy";
 
-  const initial: SearchProgress = { stage: "Начинаю…", found: 0, target: p.requested, checked: 0, filtered: 0, warnings: [] };
+  const initial: SearchProgress = {
+    stage: "Начинаю…",
+    candidates: 0,
+    found: 0,
+    target: p.requested,
+    checked: 0,
+    filtered: 0,
+    withEmail: 0,
+    needsReview: 0,
+    warnings: [],
+  };
   const msg = await api.sendMessage(p.chatId, progressText(p, initial), { parse_mode: "HTML" });
 
   let lastText = "";

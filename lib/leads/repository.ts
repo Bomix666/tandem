@@ -1,9 +1,11 @@
 // Работа с БД для модуля лидов: сохранение результатов поиска с защитой от
 // дублей, списки, фильтры, история, статистика, настройки.
 
-import { Prisma, type Lead, type LeadStatus } from "@prisma/client";
+import { Prisma, type Lead, type LeadContact, type LeadStatus } from "@prisma/client";
 import { prisma } from "../prisma";
+import { usableEmails, type EmailContact } from "./contacts";
 import { LeadIndex, type DedupeRecord } from "./dedupe";
+import { changeLeadStatus, recordLeadEvent } from "./events";
 import { mergeDraftInto } from "./merge";
 import { resolveNiche } from "./niches";
 import { buildOfferPlan, offerSummary } from "./offer";
@@ -138,11 +140,13 @@ export async function saveSearchOutcome(params: {
           data: {
             workspaceId,
             createdById: userId,
+            status: "FOUND", // 🔎 результат поиска; «🆕 Новый» — когда пользователь сохранит лид
             ...draftColumns(acc.draft),
             ...assessmentColumns(acc.result.score, acc.result.potential, acc.result.reasons, offerSummary(acc.offer)),
           },
         });
         leadId = created.id;
+        await recordLeadEvent({ workspaceId, leadId, type: "FOUND", toStatus: "FOUND", meta: { searchId, score: acc.result.score } });
       } catch (e) {
         if (!isUniqueViolation(e)) throw e;
         // гонка с параллельным поиском: запись появилась между проверкой и вставкой
@@ -161,12 +165,78 @@ export async function saveSearchOutcome(params: {
       }
     }
     if (wasExisting) await mergeIntoExisting(leadId, acc);
+    await saveEmailContacts(workspaceId, leadId, acc.draft.contacts ?? []);
     if (linked.has(leadId)) continue;
     linked.add(leadId);
     if (wasExisting) existingCount++;
     await prisma.leadSearchResult.create({ data: { searchId, leadId, position: position++, wasExisting } });
   }
   return { saved: linked.size, existing: existingCount };
+}
+
+const CONTACT_SOURCE = { osm: "OSM", yandex: "YANDEX", site: "SITE", manual: "MANUAL" } as const;
+
+/**
+ * Email лида → LeadContact (без дублей: один адрес — одна запись, проверка
+ * обновляется свежей). Lead.emails пересчитывается из всех контактов лида.
+ */
+export async function saveEmailContacts(workspaceId: string, leadId: string, contacts: EmailContact[]): Promise<void> {
+  if (!contacts.length) return;
+  for (const c of contacts) {
+    const existing = await prisma.leadContact.findUnique({
+      where: { leadId_kind_normalized: { leadId, kind: "EMAIL", normalized: c.value } },
+      select: { id: true },
+    });
+    const check = {
+      verification: c.check ?? null,
+      checkNote: c.checkNote ?? null,
+      checkedAt: c.checkedAt ? new Date(c.checkedAt) : null,
+    };
+    if (existing) {
+      if (c.check) await prisma.leadContact.update({ where: { id: existing.id }, data: check });
+      continue;
+    }
+    await prisma.leadContact.create({
+      data: {
+        workspaceId,
+        leadId,
+        kind: "EMAIL",
+        value: c.value,
+        normalized: c.value,
+        role: c.role,
+        sourceType: CONTACT_SOURCE[c.source],
+        sourceUrl: c.sourceUrl ?? null,
+        ...check,
+      },
+    });
+    await recordLeadEvent({ workspaceId, leadId, type: "CONTACT_FOUND", meta: { kind: "EMAIL", value: c.value, check: c.check ?? null, source: c.source } });
+  }
+  await refreshLeadEmails(leadId);
+}
+
+/** Lead.emails = пригодные адреса из LeadContact, лучшие первыми. */
+export async function refreshLeadEmails(leadId: string): Promise<void> {
+  const rows = await prisma.leadContact.findMany({ where: { leadId, kind: "EMAIL" } });
+  if (!rows.length) return;
+  const emails = usableEmails(rows.map(contactRowToEmail));
+  await prisma.lead.update({ where: { id: leadId }, data: { emails } });
+  const primary = emails[0];
+  await prisma.leadContact.updateMany({ where: { leadId, kind: "EMAIL" }, data: { isPrimary: false } });
+  if (primary) await prisma.leadContact.updateMany({ where: { leadId, kind: "EMAIL", normalized: primary }, data: { isPrimary: true } });
+}
+
+const SOURCE_FROM_DB = { OSM: "osm", YANDEX: "yandex", SITE: "site", MANUAL: "manual" } as const;
+
+export function contactRowToEmail(r: LeadContact): EmailContact {
+  return {
+    value: r.value,
+    source: SOURCE_FROM_DB[r.sourceType],
+    sourceUrl: r.sourceUrl ?? undefined,
+    role: r.role ?? "",
+    check: r.verification ?? undefined,
+    checkNote: r.checkNote ?? undefined,
+    checkedAt: r.checkedAt?.toISOString(),
+  };
 }
 
 // ---------- запуски поиска ----------
@@ -179,7 +249,7 @@ export async function createLeadSearch(data: {
   city: string;
   requested: number;
   extra: string | null;
-  osmOnly: boolean;
+  source: "osm" | "yandex";
   parentId?: string;
   offset?: number;
 }) {
@@ -192,7 +262,8 @@ export async function createLeadSearch(data: {
       city: data.city,
       requested: data.requested,
       extra: data.extra,
-      osmOnly: data.osmOnly,
+      osmOnly: data.source === "osm",
+      source: data.source,
       parentId: data.parentId,
       nextOffset: data.offset ?? 0,
     },
@@ -203,7 +274,16 @@ export async function createLeadSearch(data: {
 export async function updateSearchProgress(searchId: string, p: SearchProgress) {
   await prisma.leadSearch.updateMany({
     where: { id: searchId, status: "RUNNING" },
-    data: { found: p.found, checked: p.checked, filtered: p.filtered, stage: p.stage || null, warnings: p.warnings },
+    data: {
+      found: p.found,
+      candidates: p.candidates,
+      checked: p.checked,
+      filtered: p.filtered,
+      withEmail: p.withEmail,
+      needsReview: p.needsReview,
+      stage: p.stage || null,
+      warnings: p.warnings,
+    },
   });
 }
 
@@ -214,8 +294,11 @@ export async function finishLeadSearch(searchId: string, outcome: SearchOutcome,
       status: "DONE",
       stage: null,
       found,
+      candidates: outcome.candidates,
       checked: outcome.checked,
       filtered: outcome.filtered,
+      withEmail: outcome.withEmail,
+      needsReview: outcome.needsReview,
       nextOffset: outcome.nextOffset,
       warnings: outcome.warnings,
       rejectedKeys: outcome.rejectedKeys,
@@ -267,13 +350,14 @@ export async function potentialBreakdown(searchId: string) {
 
 // ---------- «Мои лиды» ----------
 
-/** a — все, f — сохранённые, n — новые, t — связаться, g — переговоры, c — клиенты, r — отказы, q — поиск по названию. */
-export type LeadFilter = "a" | "f" | "n" | "t" | "g" | "c" | "r" | "q";
-export const LEAD_FILTERS: LeadFilter[] = ["a", "f", "n", "t", "g", "c", "r", "q"];
+/** a — все, f — сохранённые, d — найденные, n — новые, t — связаться, g — переговоры, c — клиенты, r — отказы, q — поиск по названию. */
+export type LeadFilter = "a" | "f" | "d" | "n" | "t" | "g" | "c" | "r" | "q";
+export const LEAD_FILTERS: LeadFilter[] = ["a", "f", "d", "n", "t", "g", "c", "r", "q"];
 
 const FILTER_WHERE: Record<LeadFilter, Prisma.LeadWhereInput> = {
   a: {},
   f: { saved: true },
+  d: { status: "FOUND" },
   n: { status: "NEW" },
   t: { status: "TO_CONTACT" },
   g: { status: "NEGOTIATION" },
@@ -319,6 +403,7 @@ export async function nextLeadAfter(workspaceId: string, filter: LeadFilter, cur
 
 const TASK_LINKS = {
   tasks: { orderBy: { createdAt: "desc" }, include: { task: { select: { id: true, title: true, createdAt: true } } } },
+  contacts: { where: { kind: "EMAIL" }, orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }] },
 } satisfies Prisma.LeadInclude;
 
 export async function getLead(leadId: string, workspaceId: string) {
@@ -345,15 +430,39 @@ export async function getActiveSearch(workspaceId: string) {
 
 export type LeadWithTasks = NonNullable<Awaited<ReturnType<typeof getLead>>>;
 
-export async function setLeadStatus(leadId: string, workspaceId: string, status: LeadStatus) {
-  const res = await prisma.lead.updateMany({ where: { id: leadId, workspaceId }, data: { status, statusChangedAt: new Date() } });
-  return res.count > 0;
+export async function setLeadStatus(leadId: string, workspaceId: string, status: LeadStatus, actorId?: string | null) {
+  return changeLeadStatus({ leadId, workspaceId, status, actorId });
 }
 
-export async function toggleLeadSaved(leadId: string, workspaceId: string): Promise<boolean | null> {
+/**
+ * «❤️ Сохранить» / убрать из сохранённых. Сохранение найденного лида берёт
+ * его в работу: 🔎 Найден → 🆕 Новый.
+ */
+export async function setLeadSaved(leadId: string, workspaceId: string, saved: boolean, actorId?: string | null): Promise<boolean> {
+  const lead = await prisma.lead.findFirst({ where: { id: leadId, workspaceId }, select: { saved: true, status: true } });
+  if (!lead) return false;
+  if (lead.saved === saved) return true;
+  const toNew = saved && lead.status === "FOUND";
+  await prisma.lead.update({
+    where: { id: leadId },
+    data: { saved, ...(toNew ? { status: "NEW" as const, statusChangedAt: new Date() } : {}) },
+  });
+  if (saved) {
+    await recordLeadEvent({
+      workspaceId,
+      leadId,
+      type: "SAVED",
+      actorId,
+      ...(toNew ? { fromStatus: "FOUND" as const, toStatus: "NEW" as const } : {}),
+    });
+  }
+  return true;
+}
+
+export async function toggleLeadSaved(leadId: string, workspaceId: string, actorId?: string | null): Promise<boolean | null> {
   const lead = await prisma.lead.findFirst({ where: { id: leadId, workspaceId }, select: { saved: true } });
   if (!lead) return null;
-  await prisma.lead.update({ where: { id: leadId }, data: { saved: !lead.saved } });
+  await setLeadSaved(leadId, workspaceId, !lead.saved, actorId);
   return !lead.saved;
 }
 
@@ -369,6 +478,14 @@ export async function getLeadSettings(workspaceId: string) {
 
 export async function setAvgCheck(workspaceId: string, avgCheck: number) {
   return prisma.leadSettings.upsert({ where: { workspaceId }, update: { avgCheck }, create: { workspaceId, avgCheck } });
+}
+
+const SENDER_COLUMNS = { name: "senderName", company: "companyName", portfolio: "portfolioUrl", contact: "senderContact" } as const;
+
+/** Поле подписи в предложениях (пустое значение — очистить). */
+export async function setSenderField(workspaceId: string, field: keyof typeof SENDER_COLUMNS, value: string | null) {
+  const data = { [SENDER_COLUMNS[field]]: value };
+  return prisma.leadSettings.upsert({ where: { workspaceId }, update: data, create: { workspaceId, ...data } });
 }
 
 export async function getLeadStats(workspaceId: string) {

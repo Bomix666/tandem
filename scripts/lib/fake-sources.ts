@@ -5,6 +5,7 @@
 
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { PrismaClient } from "@prisma/client";
 
 export const FAKE_YANDEX_KEY = "e2e-yandex-key";
 
@@ -23,19 +24,27 @@ interface FakeOrg {
   hours?: string;
 }
 
-// Второй адрес для поддельных сайтов: разные хосты — как у настоящих разных
+// Другие адреса для поддельных сайтов: разные хосты — как у настоящих разных
 // бизнесов (иначе защита от дублей справедливо склеит их по домену).
 let altSitePort = 0;
+let lavkaSitePort = 0;
 
-/** Сервер сайтов на 127.0.0.3 — вызвать один раз до поиска. */
+/** Серверы сайтов на 127.0.0.3 и 127.0.0.4 — вызвать один раз до поиска. */
 export async function startAltSiteServer(state: FakeSourcesState) {
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.3");
-    if (!handleFakeSource(url, res, 0, state)) res.writeHead(404).end();
-  });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.3", r));
-  altSitePort = (server.address() as AddressInfo).port;
-  return { close: () => new Promise<void>((r) => server.close(() => r())) };
+  const start = async (host: string) => {
+    const server = http.createServer((req, res) => {
+      const url = new URL(req.url ?? "/", `http://${host}`);
+      if (!handleFakeSource(url, res, 0, state)) res.writeHead(404).end();
+    });
+    await new Promise<void>((r) => server.listen(0, host, r));
+    return server;
+  };
+  const alt = await start("127.0.0.3");
+  const lavka = await start("127.0.0.4");
+  altSitePort = (alt.address() as AddressInfo).port;
+  lavkaSitePort = (lavka.address() as AddressInfo).port;
+  const close = (srv: http.Server) => new Promise<void>((r) => srv.close(() => r()));
+  return { close: async () => void (await Promise.all([close(alt), close(lavka)])) };
 }
 
 function moscow(port: number): FakeOrg[] {
@@ -50,7 +59,7 @@ function moscow(port: number): FakeOrg[] {
     { id: "m7", name: "Yclients Barber", addr: "Россия, Москва, Никольская улица, 7", ll: [37.622, 55.757], phones: ["+7 (495) 111-11-07"], url: "https://n1.yclients.com/company/7" },
     { id: "m8", name: "Old School Barber", addr: "Россия, Москва, Малая Бронная улица, 8", ll: [37.6, 55.762], phones: ["+7 (495) 111-11-08"], url: site("old") },
     { id: "m9", name: "Modern Barber", addr: "Россия, Москва, Садовая улица, 9", ll: [37.62, 55.77], phones: ["+7 (495) 111-11-09"], url: site("modern", true) },
-    { id: "m10", name: "Down Barber", addr: "Россия, Москва, Лесная улица, 10", ll: [37.59, 55.78], phones: ["+7 (495) 111-11-10"], url: "http://127.0.0.2:1/" },
+    { id: "m10", name: "Down Barber", addr: "Россия, Москва, Лесная улица, 10", ll: [37.59, 55.78], phones: ["+7 (495) 111-11-10"], url: "http://127.0.0.2:59999/" },
   ];
 }
 
@@ -70,6 +79,13 @@ const OLD_SITE = `<html><head><script src="//s1.ucoz.net/x.js"></script></head><
 <a href="mailto:oldschoolbarber@gmail.com">Почта</a><a href="tel:+74951111108">Звоните</a><p>© 2014 Old School</p></body></html>`;
 const MODERN_SITE = `<html><head><meta name="viewport" content="width=device-width"></head><body><form><input type="tel" name="phone"><button>Записаться</button></form>
 <a href="https://t.me/modernbarber">Telegram</a><footer>© 2020–2026</footer></body></html>`;
+
+// Сайт для локального OSM: на главной email нет, он на странице «Контакты» —
+// там же личный адрес директора (не сохраняется) и адрес с «мёртвым» доменом (🔴).
+const LAVKA_HOME = `<html><head><meta name="viewport" content="width=device-width"></head><body><h1>Lavka Barber</h1>
+<a href="/site/lavka/kontakty">Контакты</a><a href="tel:+74953330101">Позвонить</a><p>© 2016 Lavka</p></body></html>`;
+const LAVKA_CONTACTS = `<html><body><h1>Контакты</h1><p>Пишите: info [at] lavka-barber [dot] ru</p>
+<p>Директор: <a href="mailto:ivan.petrov@lavka-barber.ru">Иван Петров</a></p><p>Заказы: zakaz@lavkabarber.com</p></body></html>`;
 
 function yandexResponse(port: number, text: string, skip: number) {
   const orgs = text.includes("Казань") ? KAZAN : text.includes("Москва") ? moscow(port) : [];
@@ -115,6 +131,11 @@ export function handleFakeSource(url: URL, res: ServerResponse, port: number, st
     else json(200, OVERPASS);
     return true;
   }
+  if (url.pathname === "/site/lavka" || url.pathname === "/site/lavka/kontakty") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(url.pathname === "/site/lavka" ? LAVKA_HOME : LAVKA_CONTACTS);
+    return true;
+  }
   if (url.pathname === "/site/old" || url.pathname === "/site/modern") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(url.pathname === "/site/old" ? OLD_SITE : MODERN_SITE);
@@ -134,7 +155,53 @@ export function fakeSourcesEnv(port: number, withYandex = true): Record<string, 
     YANDEX_PAGE_CACHE_MS: "0", // в тестах кеш страниц выключен — каждый сценарий бьёт по фейковому серверу
     LEADS_ALLOW_PRIVATE_URLS: "true",
     LEADS_OSM_ENABLED: "true",
+    // DNS почтовых доменов без сети: есть почта / домена нет; остальное — «DNS не ответил»
+    LEADS_MX_OVERRIDES: "gmail.com=mx,blackbarber.ru=mx,lavka-barber.ru=mx,lavkabarber.com=nxdomain,*=dns_error",
   };
+}
+
+/**
+ * Локальная копия OSM для тестов: граница Москвы (квадрат внутри прямоугольника
+ * Nominatim) и четыре точки — барбершоп с сайтом, барбершоп без контактов,
+ * барбершоп за городом (в прямоугольнике, но вне границы) и цветочный.
+ */
+export async function seedLocalOsm(prisma: PrismaClient) {
+  await prisma.osmArea.create({
+    data: {
+      key: "москва",
+      name: "Москва",
+      kind: "city",
+      south: 55.1,
+      west: 36.8,
+      north: 56.1,
+      east: 38.0,
+      geometry: { type: "Polygon", coordinates: [[[37.3, 55.5], [37.9, 55.5], [37.9, 55.95], [37.3, 55.95], [37.3, 55.5]]] },
+    },
+  });
+  const imp = await prisma.osmImport.create({
+    data: { regions: ["e2e"], status: "DONE", places: 4, sourceDate: new Date(), finishedAt: new Date() },
+  });
+  const place = (id: string, name: string, lat: number, lon: number, tags: Record<string, string>, kinds: string[]) => ({
+    id,
+    name,
+    lat,
+    lon,
+    kinds,
+    tags: { name, ...tags },
+    phone: tags.phone ?? null,
+    website: tags.website ?? null,
+    email: null,
+    hasContact: !!(tags.phone || tags.website),
+    importId: imp.id,
+  });
+  await prisma.osmPlace.createMany({
+    data: [
+      place("node/101", "Lavka Barber", 55.75, 37.6, { shop: "hairdresser", hairdresser: "barber", phone: "+7 495 333-01-01", website: `http://127.0.0.4:${lavkaSitePort}/site/lavka`, "addr:street": "Лавочкина улица", "addr:housenumber": "1" }, ["shop=hairdresser"]),
+      place("node/104", "Тихий Барбер", 55.8, 37.5, { shop: "hairdresser", male: "yes" }, ["shop=hairdresser"]),
+      place("node/102", "Окраина Барбер", 55.3, 37.0, { shop: "hairdresser", hairdresser: "barber", phone: "+7 495 333-01-02" }, ["shop=hairdresser"]),
+      place("node/103", "Цветы у дома", 55.7, 37.55, { shop: "florist", phone: "+7 495 333-01-03" }, ["shop=florist"]),
+    ],
+  });
 }
 
 /** Отдельный сервер только с источниками (для теста API и ручной проверки интерфейса). */

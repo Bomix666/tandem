@@ -1,9 +1,11 @@
-// Яндекс «API Поиска по организациям» — основной источник бизнесов.
-// Документация: https://yandex.ru/dev/geosearch/doc/ru/
+// Яндекс «API Поиска по организациям» — тестовая интеграция (основной источник —
+// локальная копия OpenStreetMap): условия Яндекса ограничивают хранение
+// результатов, поэтому на нём не строится основная работа. Документация: https://yandex.ru/dev/geosearch/doc/ru/
 // Ключ — YANDEX_PLACES_API_KEY в .env (Кабинет разработчика Яндекса).
 
 import { leadsConfig } from "../config";
 import { fetchJson, HttpError } from "../http";
+import { redact } from "../redact";
 import type { BusinessCandidate } from "../types";
 
 export const YANDEX_PAGE_SIZE = 50; // максимум API за один запрос
@@ -123,7 +125,7 @@ export async function searchYandex(params: { text: string; skip: number; results
     } catch (err) {
       lastError = err;
       const status = err instanceof HttpError ? err.status : null;
-      console.error(`Yandex search failed (attempt ${attempt}/${attempts}): ${(err as Error).message}`);
+      console.error(`Yandex search failed (attempt ${attempt}/${attempts}): ${redact((err as Error).message)}`);
       const retryable = status === null || status === 429 || status >= 500;
       if (!retryable || attempt === attempts) break;
       await new Promise((r) => setTimeout(r, leadsConfig.yandexRetryDelayMs * attempt));

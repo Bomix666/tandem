@@ -41,7 +41,7 @@ export function LeadsHistory({ reloadKey, onOpen }: { reloadKey: number; onOpen:
             <div className="hsub">
               {s.status === "RUNNING" ? "⏳ идёт поиск…" : s.status === "FAILED" ? "⚠️ не выполнен" : leadsWord(s.found)}
               {s.parentId ? " · найти ещё" : ""}
-              {s.osmOnly ? " · только OSM" : ""}
+              {s.source === "yandex" ? " · 🧪 Яндекс" : ""}
             </div>
           </div>
           <div className="hcount">{s.status === "DONE" ? s.found : ""}</div>

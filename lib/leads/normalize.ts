@@ -119,7 +119,7 @@ const BOOKING_HOSTS: [RegExp, string][] = [
 const SHARED_SITE_HOSTS = new Set(["sites.google.com"]);
 
 // Карточки в справочниках — не собственный сайт и не соцсеть.
-const DIRECTORY_HOSTS = /(^|\.)(yandex\.(ru|com)|2gis\.(ru|com)|google\.[a-z.]+|zoon\.ru|yell\.ru|flamp\.ru|avito\.ru)$/;
+const DIRECTORY_HOSTS = /(^|\.)(yandex\.(ru|com)|2gis\.(ru|com|biz)|google\.[a-z.]+|zoon\.ru|yell\.ru|flamp\.ru|avito\.ru)$/;
 const SHARE_PATHS = /\/(share|sharer|share\.php|intent)(\/|$|\?)/i;
 
 export type UrlClass =

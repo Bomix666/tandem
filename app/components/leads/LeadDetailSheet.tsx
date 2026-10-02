@@ -174,7 +174,31 @@ export function LeadDetailSheet({ ids, index, onNavigate, onClose, onChanged }: 
 
             <div className="kv">
               <div className="k">Email</div>
-              {shown.emails.length ? (
+              {shown.contacts.length ? (
+                <div className="v emails">
+                  {shown.contacts.map((c) => (
+                    <div key={c.value} className="email-row">
+                      <span className={`echeck ${c.check?.toLowerCase() ?? "none"}`} title={c.note ?? undefined}>
+                        {c.check === "VALID" ? "🟢" : c.check === "INVALID" ? "🔴" : "🟡"}
+                      </span>
+                      <div className="emain">
+                        {c.check === "INVALID" ? <span className="dead">{c.value}</span> : <a href={`mailto:${c.value}`}>{c.value}</a>}
+                        <div className="esub">
+                          {c.checkLabel ?? "Не проверен"} ·{" "}
+                          {c.sourceUrl ? (
+                            <button className="linkbtn" onClick={() => openExternalLink(c.sourceUrl!)}>
+                              {c.sourceLabel}
+                            </button>
+                          ) : (
+                            c.sourceLabel
+                          )}
+                          {c.note ? ` — ${c.note}` : ""}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : shown.emails.length ? (
                 <div className="v">
                   {shown.emails.map((m, i) => (
                     <span key={m}>

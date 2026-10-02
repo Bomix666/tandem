@@ -3,7 +3,7 @@ import type { LeadWithTasks } from "../../../lib/leads/repository";
 import { makeAudit, makeLeadRow } from "../../../lib/leads/__tests__/helpers";
 import { leadCardKeyboard, numberFromNav, parseMoney, plural, renderLeadCard, statsText, wizardConfirmView } from "../format";
 
-const lead = (overrides = {}): LeadWithTasks => ({ ...makeLeadRow(overrides), tasks: [] }) as LeadWithTasks;
+const lead = (overrides = {}): LeadWithTasks => ({ ...makeLeadRow(overrides), tasks: [], contacts: [] }) as LeadWithTasks;
 
 describe("карточка лида", () => {
   it("показывает отсутствующие данные честно: «Не найден»", () => {
@@ -60,11 +60,12 @@ describe("мелочи форматирования", () => {
     expect(text.replace(/\s/g, " ")).toContain("250 000 ₽");
     expect(text).toContain("не гарантированный доход");
   });
-  it("мастер без ключа Яндекса показывает «не настроено» и вариант только OSM", () => {
-    const v = wizardConfirmView({ niche: "Барбершопы", city: "Москва", requested: 10, extra: null }, { yandex: false, osm: true });
-    expect(v.text).toContain("Поиск клиентов пока не настроен");
-    const data = v.kb.inline_keyboard.flat().map((b) => ("callback_data" in b ? b.callback_data : ""));
-    expect(data).toContain("ld:w:osm");
-    expect(data).not.toContain("ld:w:go");
+  it("мастер: основной поиск — OpenStreetMap, Яндекс — только тестовая кнопка при наличии ключа", () => {
+    const draft = { niche: "Барбершопы", city: "Москва", requested: 10, extra: null };
+    const data = (yandex: boolean) =>
+      wizardConfirmView(draft, { yandex, osm: true }).kb.inline_keyboard.flat().map((b) => ("callback_data" in b ? b.callback_data : ""));
+    expect(wizardConfirmView(draft, { yandex: false, osm: true }).text).toContain("OpenStreetMap");
+    expect(data(false)).toEqual(["ld:w:go", "ld:w:x"]);
+    expect(data(true)).toEqual(["ld:w:go", "ld:w:ya", "ld:w:x"]);
   });
 });

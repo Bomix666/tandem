@@ -27,7 +27,10 @@ export function updateLead(id: string, input: { status?: LeadStatusDTO; saved?: 
 }
 
 export function createProposal(id: string) {
-  return apiFetch<{ text: string; engine: string; note: string | null }>(`/api/leads/${id}/proposal`, { method: "POST" });
+  return apiFetch<{ text: string; subject: string | null; recipient: string | null; warnings: string[]; engine: string; note: string | null }>(
+    `/api/leads/${id}/proposal`,
+    { method: "POST" }
+  );
 }
 
 export type TaskFromLeadResponse =
@@ -40,7 +43,7 @@ export function createTaskFromLead(id: string, force = false) {
 }
 
 export type StartSearchInput =
-  | { niche: string; city: string; requested: number; extra?: string | null; osmOnly?: boolean }
+  | { niche: string; city: string; requested: number; extra?: string | null; source?: "osm" | "yandex" }
   | { fromSearchId: string; mode: "more" | "retry" };
 
 export class SearchStartError extends Error {

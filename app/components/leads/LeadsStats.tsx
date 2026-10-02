@@ -74,8 +74,9 @@ export function LeadsStats({ meta, onMeta }: { meta: LeadsMetaDTO; onMeta: (m: L
       </div>
 
       <div className="note info">
-        Источники: Яндекс Карты — {meta.yandex ? "подключены" : "не подключены (нужен YANDEX_PLACES_API_KEY)"}; OpenStreetMap —{" "}
-        {meta.osm ? "включён" : "выключен"}. Тексты предложений: {meta.proposalLabel}.
+        Источник: OpenStreetMap — {meta.osm ? meta.osmStatus : "выключен"}
+        {meta.yandex ? "; 🧪 Яндекс Карты — подключены для теста" : ""}. Тексты предложений: {meta.proposalLabel}.
+        {"\n"}Данные карт © участники OpenStreetMap (ODbL).
       </div>
     </>
   );

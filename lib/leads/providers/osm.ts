@@ -6,8 +6,9 @@
 import { leadsConfig } from "../config";
 import { fetchJson, HttpError } from "../http";
 import type { NicheSpec } from "../niches";
-import { escapeRegExp, socialFromHandle, uniq } from "../normalize";
-import type { BusinessCandidate, SocialLink, SocialType } from "../types";
+import { escapeRegExp } from "../normalize";
+import { osmToCandidate } from "../osm/tags";
+import type { BusinessCandidate } from "../types";
 import { ProviderError } from "./yandex";
 
 export type BBox = [south: number, west: number, north: number, east: number];
@@ -68,65 +69,12 @@ interface OverpassElement {
   tags?: Record<string, string>;
 }
 
-const CATEGORY_RU: Record<string, string> = {
-  hairdresser: "Парикмахерская",
-  beauty: "Салон красоты",
-  dentist: "Стоматология",
-  car_repair: "Автосервис",
-  cafe: "Кафе",
-  fitness_centre: "Фитнес-центр",
-  florist: "Цветочный магазин",
-  mobile_phone: "Салон связи",
-  electronics_repair: "Ремонт электроники",
-};
-
-const SOCIAL_TAGS: [string[], SocialType][] = [
-  [["contact:instagram", "instagram"], "instagram"],
-  [["contact:vk", "vk"], "vk"],
-  [["contact:telegram", "telegram"], "telegram"],
-  [["contact:whatsapp", "whatsapp"], "whatsapp"],
-  [["contact:ok", "ok"], "ok"],
-  [["contact:facebook", "facebook"], "facebook"],
-];
-
-const splitMulti = (v?: string) => (v ?? "").split(";").map((s) => s.trim()).filter(Boolean);
-
 export function parseOverpass(json: { elements?: OverpassElement[] }): BusinessCandidate[] {
   const out: BusinessCandidate[] = [];
   for (const el of json.elements ?? []) {
     const t = el.tags ?? {};
     if (!t.name) continue;
-    const lat = el.lat ?? el.center?.lat;
-    const lon = el.lon ?? el.center?.lon;
-
-    const socials: SocialLink[] = [];
-    for (const [keys, type] of SOCIAL_TAGS) {
-      const value = keys.map((k) => t[k]).find(Boolean);
-      const s = value ? socialFromHandle(type, value) : null;
-      if (s) socials.push(s);
-    }
-
-    const street = t["addr:street"];
-    const house = t["addr:housenumber"];
-    const kindTag = t.shop ?? t.amenity ?? t.craft ?? t.leisure ?? t.healthcare;
-    // мужская парикмахерская в OSM: shop=hairdresser + hairdresser=barber или male=yes
-    const isBarber = t.shop === "hairdresser" && (t.hairdresser === "barber" || t.male === "yes");
-
-    out.push({
-      provider: "osm",
-      externalId: `${el.type}/${el.id}`,
-      name: t.name,
-      categories: isBarber ? ["Барбершоп"] : kindTag ? [CATEGORY_RU[kindTag] ?? kindTag] : [],
-      address: street ? [street, house].filter(Boolean).join(", ") : undefined,
-      lat,
-      lon,
-      websiteRaw: t["contact:website"] ?? t.website ?? t.url,
-      phones: uniq([...splitMulti(t["contact:phone"]), ...splitMulti(t.phone), ...splitMulti(t["contact:mobile"])]),
-      emails: uniq([...splitMulti(t["contact:email"]), ...splitMulti(t.email)]).map((e) => e.toLowerCase()),
-      socials,
-      hours: t.opening_hours,
-      sourceUrl: `https://www.openstreetmap.org/${el.type}/${el.id}`,
-    });
+    out.push(osmToCandidate(`${el.type}/${el.id}`, el.lat ?? el.center?.lat, el.lon ?? el.center?.lon, t));
   }
   // стабильный порядок — чтобы «Найти ещё» в режиме только OSM шло дальше по списку
   return out.sort((a, b) => a.externalId.localeCompare(b.externalId));

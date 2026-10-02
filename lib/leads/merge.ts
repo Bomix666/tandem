@@ -2,6 +2,7 @@
 // Яндекс — основа, OSM — подтверждение и недостающие поля (соцсети, email,
 // сайт), проверка сайта — email/соцсети/телефоны с сайта самой компании.
 
+import { addEmailContacts, recheckContacts } from "./contacts";
 import { matchesNiche, type NicheSpec } from "./niches";
 import {
   classifyUrl,
@@ -45,7 +46,7 @@ export function candidateToDraft(c: BusinessCandidate, ctx: { city: string; nich
   addWebsite(draft, c.websiteRaw);
   draft.socials = mergeSocials(draft.socials, c.socials);
   addPhones(draft, c.phones);
-  addEmails(draft, c.emails);
+  addEmailContacts(draft, c.emails, c.provider, c.sourceUrl);
   return draft;
 }
 
@@ -83,6 +84,16 @@ function addEmails(draft: LeadDraft, emails: string[]) {
   draft.emails = uniq([...draft.emails, ...emails.map((e) => e.trim().toLowerCase()).filter((e) => EMAIL_RE.test(e))]).slice(0, 3);
 }
 
+function mergeContacts(draft: LeadDraft, fresh: LeadDraft) {
+  if (!fresh.contacts?.length) return;
+  draft.contacts = [...(draft.contacts ?? [])];
+  for (const c of fresh.contacts) {
+    const i = draft.contacts.findIndex((x) => x.value === c.value);
+    if (i < 0) draft.contacts.push({ ...c });
+    else if (c.check) draft.contacts[i] = { ...draft.contacts[i]!, check: c.check, checkNote: c.checkNote, checkedAt: c.checkedAt };
+  }
+}
+
 function addSocials(draft: LeadDraft, socials: SocialLink[]) {
   draft.socials = mergeSocials(draft.socials, socials);
 }
@@ -118,10 +129,12 @@ export function enrichWithOsm(draft: LeadDraft, c: BusinessCandidate, city: stri
   draft.confirmedByOsm = true;
   draft.osmId ??= c.externalId;
   draft.sources.push({ provider: "osm", url: c.sourceUrl });
-  if (draft.websiteKind !== "own") addWebsite(draft, c.websiteRaw);
+  const hadSite = draft.websiteKind === "own";
+  if (!hadSite) addWebsite(draft, c.websiteRaw);
+  if (!hadSite && draft.websiteKind === "own") recheckContacts(draft);
   addSocials(draft, c.socials);
   addPhones(draft, c.phones);
-  addEmails(draft, c.emails);
+  addEmailContacts(draft, c.emails, "osm", c.sourceUrl);
   draft.hours ??= c.hours;
   if (!draft.address && c.address) {
     draft.address = c.address;
@@ -138,7 +151,9 @@ export function enrichWithOsm(draft: LeadDraft, c: BusinessCandidate, city: stri
 export function applyAudit(draft: LeadDraft, audit: SiteAudit): void {
   draft.audit = audit;
   if (audit.status !== "ok") return;
-  addEmails(draft, audit.emails);
+  addEmailContacts(draft, audit.emails, "site", audit.finalUrl ?? audit.url);
+  // в сохраняемой проверке сайта — только адреса, прошедшие правила
+  audit.emails = (draft.contacts ?? []).filter((c) => c.source === "site").map((c) => c.value);
   addSocials(draft, audit.socials);
   addPhones(draft, audit.phones);
 }
@@ -156,6 +171,7 @@ export function mergeDraftInto(base: LeadDraft, fresh: LeadDraft): LeadDraft {
     phones: [...base.phones],
     normPhones: [...base.normPhones],
     emails: [...base.emails],
+    contacts: base.contacts ? [...base.contacts] : undefined,
   };
   if (m.websiteKind !== "own" && fresh.websiteKind === "own") {
     m.websiteKind = "own";
@@ -168,6 +184,7 @@ export function mergeDraftInto(base: LeadDraft, fresh: LeadDraft): LeadDraft {
   addSocials(m, fresh.socials);
   addPhones(m, fresh.phones);
   addEmails(m, fresh.emails);
+  mergeContacts(m, fresh);
   m.hours ??= fresh.hours;
   m.category ??= fresh.category;
   if (!m.address && fresh.address) {

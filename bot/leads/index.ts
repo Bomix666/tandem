@@ -7,9 +7,12 @@
 import type { LeadStatus, User } from "@prisma/client";
 import { InlineKeyboard, type Bot, type Context } from "grammy";
 import { isYandexConfigured, leadsConfig } from "../../lib/leads/config";
-import { buildLeadFacts, getProposalGenerator } from "../../lib/leads/proposal";
+import type { LeadSource } from "../../lib/leads/jobs";
 import { createTaskFromLead } from "../../lib/leads/lead-tasks";
-import { LEAD_STATUS_ORDER, POTENTIAL_LABELS, statusText } from "../../lib/leads/labels";
+import { EMAIL_CHECK_EMOJI, LEAD_STATUS_ORDER, POTENTIAL_LABELS, statusText } from "../../lib/leads/labels";
+import { createOutreachDraft, getOutreachGenerator } from "../../lib/leads/outreach";
+import { osmLocalStatus } from "../../lib/leads/providers/osm-local";
+import { redactError } from "../../lib/leads/redact";
 import { CITY_PRESETS, NICHE_PRESETS } from "../../lib/leads/niches";
 import {
   failInterruptedSearches,
@@ -23,9 +26,9 @@ import {
   listSearches,
   nextLeadAfter,
   potentialBreakdown,
-  saveProposal,
   setAvgCheck,
   setLeadStatus,
+  setSenderField,
   toggleLeadSaved,
   type LeadFilter,
   type LeadWithTasks,
@@ -34,9 +37,10 @@ import { socialLabel } from "../../lib/leads/scoring";
 import type { SocialLink } from "../../lib/leads/types";
 import { getUserWorkspace } from "../../lib/telegram-auth";
 import { MENU } from "../menu";
-import { chatState, type ChatState } from "../state";
+import { chatState, type ChatState, type SenderField } from "../state";
 import {
   e,
+  emailLines,
   EXTRA_PRESETS,
   formatDate,
   formatMoney,
@@ -48,6 +52,7 @@ import {
   numberFromNav,
   parseMoney,
   renderLeadCard,
+  settingsKeyboard,
   settingsText,
   statsText,
   statusPickerKeyboard,
@@ -73,6 +78,12 @@ interface Ctx {
 type WizardState = Extract<ChatState, { kind: "lead_wizard" }>;
 
 const PAGE_SIZE = 8;
+const SENDER_PROMPTS: Record<SenderField, string> = {
+  name: "✍️ Как тебя зовут? Имя появится в подписи предложений.",
+  company: "🏢 Название студии или компании (если есть).",
+  portfolio: "🔗 Ссылка на портфолио — например, https://behance.net/…",
+  contact: "📞 Контакт для подписи: телефон или @username в Telegram.",
+};
 const lastQueries = new Map<number, string>(); // «🔍 Поиск» в «Мои лиды» — последний запрос чата
 
 const ignoreNotModified = (err: Error) => {
@@ -155,10 +166,11 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
         st.step = "confirm";
         break;
       case "go":
-      case "osm": {
+      case "osm": // кнопка из старых сообщений («только OSM»)
+      case "ya": {
         if (st.step !== "confirm" || !d.niche || !d.city || !d.requested) return "Сначала заполни все шаги";
-        const osmOnly = act === "osm";
-        if (!osmOnly && !isYandexConfigured()) {
+        const source: LeadSource = act === "ya" ? "yandex" : "osm";
+        if (source === "yandex" && !isYandexConfigured()) {
           await ctx.editMessageText(notConfiguredText(), { parse_mode: "HTML" }).catch(ignoreNotModified);
           return;
         }
@@ -170,12 +182,12 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
           city: d.city,
           requested: d.requested,
           extra: d.extra ?? null,
-          osmOnly,
+          source,
         });
         if (result !== "started") return result === "busy" ? "Поиск уже идёт — дождись результата" : "Поиск клиентов пока не настроен";
         chatState.clear(c.chatId);
         await ctx
-          .editMessageText(`🔎 Запустил поиск: <b>${e(d.niche)}</b> · <b>${e(d.city)}</b> · ${d.requested}${osmOnly ? " · только OSM" : ""}`, {
+          .editMessageText(`🔎 Запустил поиск: <b>${e(d.niche)}</b> · <b>${e(d.city)}</b> · ${d.requested}${source === "yandex" ? " · 🧪 Яндекс" : ""}`, {
             parse_mode: "HTML",
           })
           .catch(ignoreNotModified);
@@ -280,7 +292,8 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
       `📞 <b>Контакты «${e(lead.name)}»</b>`,
       "",
       `Телефон: ${lead.phones.length ? lead.phones.map(e).join(", ") : "Не найден"}`,
-      `Email: ${lead.emails.length ? lead.emails.map(e).join(", ") : "Не найден"}`,
+      "Email:",
+      ...emailLines(lead),
       `Адрес: ${lead.address ? e(lead.address) : "Не найден"}`,
       lead.hours ? `Режим работы: ${e(lead.hours)}` : null,
       `Сайт: ${lead.website ? e(lead.website) : "Не найден"}`,
@@ -300,16 +313,23 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
     return;
   }
 
-  async function makeProposal(ctx: Context, lead: LeadWithTasks) {
-    const { generator, note } = getProposalGenerator();
-    const text = await generator.generate(buildLeadFacts(lead));
-    await saveProposal(lead.id, text);
-    await ctx.reply(
-      `✨ <b>Предложение для «${e(lead.name)}»</b>\nСделано: ${e(generator.label)}.${note ? `\n${e(note)}` : ""}\nПроверь текст перед отправкой — бот ничего не отправляет сам.`,
-      { parse_mode: "HTML" }
-    );
+  async function makeProposal(ctx: Context, c: Ctx, lead: LeadWithTasks) {
+    const draft = await createOutreachDraft({ lead, channel: "EMAIL", actorId: c.user.id });
+    const contact = lead.contacts.find((x) => x.value === draft.recipient);
+    const to = draft.recipient
+      ? `Кому: ${contact?.verification ? `${EMAIL_CHECK_EMOJI[contact.verification]} ` : ""}${e(draft.recipient)}`
+      : "Кому: email не найден — отправь через телефон или соцсети";
+    const head = [
+      `✨ <b>Предложение для «${e(lead.name)}»</b>`,
+      to,
+      draft.text.subject ? `Тема: ${e(draft.text.subject)}` : null,
+      `Сделано: ${e(draft.engine)}.${draft.note ? ` ${e(draft.note)}` : ""}`,
+      ...draft.text.warnings.map((w) => `⚠️ ${e(w)}`),
+      "Проверь текст перед отправкой — бот ничего не отправляет сам.",
+    ].filter((l): l is string => l !== null);
+    await ctx.reply(head.join("\n"), { parse_mode: "HTML" });
     const contacted = LEAD_STATUS_ORDER.indexOf("CONTACTED");
-    await ctx.reply(text, { reply_markup: new InlineKeyboard().text("💬 Отметить: Написали", `ld:sq:${lead.id}:${contacted}`) });
+    await ctx.reply(draft.text.body, { reply_markup: new InlineKeyboard().text("💬 Отметить: Написали", `ld:sq:${lead.id}:${contacted}`) });
   }
 
   async function makeTask(ctx: Context, c: Ctx, leadId: string, force: boolean): Promise<string | undefined> {
@@ -361,10 +381,11 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
 
   async function showSettings(ctx: Context, c: Ctx) {
     const settings = await getLeadSettings(c.workspace.id);
-    const { generator } = getProposalGenerator();
+    const { generator } = getOutreachGenerator();
+    const osmLocal = await osmLocalStatus().catch(() => "состояние неизвестно");
     await ctx.reply(
-      settingsText({ avgCheck: settings.avgCheck, yandex: isYandexConfigured(), osm: leadsConfig.osmEnabled, proposalLabel: generator.label }),
-      { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("✏️ Изменить средний чек", "ld:set:avg") }
+      settingsText({ ...settings, yandex: isYandexConfigured(), osm: leadsConfig.osmEnabled, osmLocal, proposalLabel: generator.label }),
+      { parse_mode: "HTML", reply_markup: settingsKeyboard(), link_preview_options: NO_PREVIEW }
     );
   }
 
@@ -372,7 +393,8 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
   async function relaunch(ctx: Context, c: Ctx, searchId: string, mode: "more" | "retry"): Promise<string | undefined> {
     const prev = await getSearch(searchId, c.workspace.id);
     if (!prev) return "Поиск не найден";
-    if (!prev.osmOnly && !isYandexConfigured()) {
+    const source: LeadSource = prev.source === "yandex" ? "yandex" : "osm";
+    if (source === "yandex" && !isYandexConfigured()) {
       await ctx.reply(notConfiguredText(), { parse_mode: "HTML" });
       return;
     }
@@ -384,7 +406,7 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
       city: prev.city,
       requested: prev.requested,
       extra: prev.extra,
-      osmOnly: prev.osmOnly,
+      source,
       parent: mode === "more" ? prev : undefined,
     });
     if (result !== "started") return result === "busy" ? "Поиск уже идёт — дождись результата" : "Поиск клиентов пока не настроен";
@@ -447,14 +469,14 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
       case "pr": {
         const lead = await getLead(a1, c.workspace.id);
         if (!lead) return "Лид не найден";
-        await makeProposal(ctx, lead);
+        await makeProposal(ctx, c, lead);
         return "Готово";
       }
       case "tk":
       case "tkf":
         return makeTask(ctx, c, a1, action === "tkf");
       case "sv": {
-        const saved = await toggleLeadSaved(a1, c.workspace.id);
+        const saved = await toggleLeadSaved(a1, c.workspace.id, c.user.id);
         if (saved === null) return "Лид не найден";
         await rerenderCard(ctx, c, a1);
         return saved ? "❤️ Лид сохранён" : "Убран из сохранённых";
@@ -468,7 +490,7 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
       case "ss":
       case "sq": {
         const status = LEAD_STATUS_ORDER[Number(a2)] as LeadStatus | undefined;
-        if (!status || !(await setLeadStatus(a1, c.workspace.id, status))) return "Лид не найден";
+        if (!status || !(await setLeadStatus(a1, c.workspace.id, status, c.user.id))) return "Лид не найден";
         if (action === "ss") await rerenderCard(ctx, c, a1);
         else await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(ignoreNotModified);
         return `Статус: ${statusText(status)}`;
@@ -500,6 +522,9 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
         if (a1 === "avg") {
           chatState.set(c.chatId, { kind: "lead_avg_check" });
           await ctx.reply("Напиши средний чек в рублях, например: 50000");
+        } else if (a1 in SENDER_PROMPTS) {
+          chatState.set(c.chatId, { kind: "lead_sender", field: a1 as SenderField });
+          await ctx.reply(`${SENDER_PROMPTS[a1 as SenderField]}\n\nЧтобы очистить поле, отправь «-».`);
         }
         return;
       default:
@@ -551,7 +576,7 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
       const c = await resolveCtx(ctx);
       if (c) toast = await routeCallback(ctx, c, ctx.callbackQuery.data.split(":"));
     } catch (err) {
-      console.error("Leads callback failed:", err);
+      console.error("Leads callback failed:", redactError(err));
       toast = "Что-то пошло не так, попробуй ещё раз";
     }
     await ctx.answerCallbackQuery(toast ? { text: toast } : undefined).catch(() => void 0);
@@ -575,6 +600,17 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
       chatState.clear(c.chatId);
       lastQueries.set(c.chatId, text.slice(0, 60));
       return showMyLeads(ctx, c, "q", 0, "send");
+    }
+    if (st.kind === "lead_sender") {
+      const value = text === "-" ? null : text.slice(0, 200);
+      if (value && st.field === "portfolio" && !/^https?:\/\/\S+\.\S+/i.test(value)) {
+        await ctx.reply("Нужна ссылка вида https://… — или «-», чтобы очистить.");
+        return;
+      }
+      chatState.clear(c.chatId);
+      await setSenderField(c.workspace.id, st.field, value);
+      await ctx.reply(value ? "✅ Сохранил. Подпись добавится в новые предложения." : "✅ Поле очищено.");
+      return showSettings(ctx, c);
     }
     if (st.kind === "lead_avg_check") {
       const value = parseMoney(text);

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { decodeHtml, isPrivateIp } from "../http";
+import { applyAudit } from "../merge";
 import { analyzeHtml, findCopyrightYear, isBotProtection, unreachableReason } from "../site-audit";
-import { NOW } from "./helpers";
+import { makeAudit, makeDraft, NOW } from "./helpers";
 
 const OLD_SITE = `<html><head><title>Барбершоп</title><script src="//s1.ucoz.net/x.js"></script></head>
 <body><center><font size=3>Добро пожаловать</font><font>Услуги</font><font>Цены</font></center>
@@ -30,11 +31,17 @@ describe("analyzeHtml", () => {
     expect(r.hasCta).toBe(true); // tel:-ссылка
   });
 
-  it("берёт только email самой компании, соцсети и телефоны", () => {
+  it("находит все email, соцсети и телефоны; почту веб-студии отсеивают правила", () => {
     const r = analyzeHtml(OLD_SITE, "http://oldbarber.ru/", NOW);
-    expect(r.emails).toEqual(["info@oldbarber.ru"]); // почта веб-студии не подходит
+    expect(r.emails).toEqual(["info@oldbarber.ru", "dev@webstudio-site.ru"]);
     expect(r.socials).toEqual([{ type: "vk", url: "https://vk.com/oldbarber" }]);
     expect(r.phones).toEqual(["74951112233"]);
+
+    const draft = makeDraft({ name: "Old Barber", websiteKind: "own", website: "http://oldbarber.ru/", domain: "oldbarber.ru" });
+    applyAudit(draft, makeAudit({ ...r, url: "http://oldbarber.ru/", finalUrl: "http://oldbarber.ru/" }));
+    expect(draft.emails).toEqual(["info@oldbarber.ru"]);
+    expect(draft.audit!.emails).toEqual(["info@oldbarber.ru"]); // в сохраняемой проверке — только принятые
+    expect(draft.contacts).toEqual([{ value: "info@oldbarber.ru", source: "site", sourceUrl: "http://oldbarber.ru/", role: "info" }]);
   });
 
   it("email из mailto: с закодированным пробелом очищается (%20info@ → info@)", () => {
@@ -47,7 +54,14 @@ describe("analyzeHtml", () => {
     expect(r).toMatchObject({ hasViewport: true, https: true, hasForm: true, hasCta: true, copyrightYear: 2026, platform: "Tilda" });
     expect(r.outdated).toEqual([]);
     expect(r.socials).toEqual([{ type: "instagram", url: "https://instagram.com/modernbarber" }]); // share-ссылка не соцсеть
-    expect(r.emails).toEqual(["hello@modernbarber.ru"]);
+    expect(r.emails).toEqual(["hello@modernbarber.ru", "support@tilda.cc"]);
+    expect(r.contactPages).toEqual([]);
+  });
+
+  it("ссылки на страницы контактов того же сайта", () => {
+    const html = `<a href="/contacts/">Контакты</a><a href="https://other.ru/contacts">чужой</a>
+      <a href="/o-kompanii">О компании</a><a href="/services">Услуги</a><a href="mailto:a@b.ru">почта</a>`;
+    expect(analyzeHtml(html, "https://www.salon.ru/", NOW).contactPages).toEqual(["https://www.salon.ru/contacts/", "https://www.salon.ru/o-kompanii"]);
   });
 
   it("находит виджет онлайн-записи", () => {

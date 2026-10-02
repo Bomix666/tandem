@@ -1,5 +1,7 @@
 // Общие типы модуля поиска клиентов.
 
+import type { EmailContact } from "./contacts";
+
 export type SocialType =
   | "instagram"
   | "vk"
@@ -59,7 +61,10 @@ export interface SiteAudit {
   copyrightYear?: number | null;
   platform?: string | null;
   outdated?: string[];
+  /** Принятые правилами email с сайта (до применения — все найденные на главной). */
   emails: string[];
+  /** Ссылки на «Контакты / О компании / Реквизиты» с главной — для поиска email. */
+  contactPages?: string[];
   socials: SocialLink[];
   phones: string[];
 }
@@ -82,7 +87,8 @@ export interface LeadDraft {
   socials: SocialLink[];
   phones: string[];
   normPhones: string[];
-  emails: string[];
+  emails: string[]; // кеш: пригодные адреса из contacts, лучшие первыми
+  contacts?: EmailContact[]; // email с источником и проверкой
   hours?: string;
   yandexId?: string;
   osmId?: string;

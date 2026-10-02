@@ -75,7 +75,7 @@ export function SearchPanel({ search, onOpenResults, onRelaunched, onDismiss, fr
     }
   }
 
-  const title = `${search.niche} · ${search.city}${search.parentId ? " · ещё" : ""}${search.osmOnly ? " · только OSM" : ""}`;
+  const title = `${search.niche} · ${search.city}${search.parentId ? " · ещё" : ""}${search.source === "yandex" ? " · 🧪 Яндекс" : ""}`;
   const close = onDismiss && (
     <button className="iconbtn pclose" onClick={onDismiss} aria-label="Скрыть">
       ✕
@@ -95,13 +95,16 @@ export function SearchPanel({ search, onOpenResults, onRelaunched, onDismiss, fr
         </div>
         <div className="pstats">
           <span>
-            Найдено <b>{search.found}/{search.requested}</b>
+            Найдено <b>{search.candidates}</b>
           </span>
           <span>
             Проверено <b>{search.checked}</b>
           </span>
           <span>
-            Отфильтровано <b>{search.filtered}</b>
+            Подходят <b>{search.found}/{search.requested}</b>
+          </span>
+          <span>
+            📧 Email <b>{search.withEmail}</b>
           </span>
         </div>
         {search.stage && <div className="pstage">{search.stage}</div>}
@@ -139,9 +142,22 @@ export function SearchPanel({ search, onOpenResults, onRelaunched, onDismiss, fr
       </div>
       <div className="psub">{title}</div>
       <div className="pstats" style={{ marginTop: 10 }}>
+        {search.candidates > 0 && (
+          <span>
+            Бизнесов <b>{search.candidates}</b>
+          </span>
+        )}
         <span>
-          Найдено <b>{search.found}</b> {leadsWord(search.found).replace(/^\d+ /, "")}
+          Подходят <b>{search.found}</b> {leadsWord(search.found).replace(/^\d+ /, "")}
         </span>
+        <span>
+          📧 С email <b>{search.withEmail}</b>
+        </span>
+        {search.needsReview > 0 && (
+          <span>
+            🟡 Проверить <b>{search.needsReview}</b>
+          </span>
+        )}
         <span>
           Проверено <b>{search.checked}</b>
         </span>

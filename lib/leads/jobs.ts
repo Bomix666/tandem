@@ -6,8 +6,10 @@
 import type { LeadSearch } from "@prisma/client";
 import { publish } from "../pubsub";
 import { isYandexConfigured, leadsConfig } from "./config";
+import { enrichContacts } from "./contacts";
+import { redact, redactError } from "./redact";
 import { resolveNiche } from "./niches";
-import { searchOsm } from "./providers/osm";
+import { searchOsmBest } from "./providers/osm-local";
 import { searchYandex } from "./providers/yandex";
 import {
   createLeadSearch,
@@ -32,7 +34,8 @@ export interface StartSearchParams {
   city: string;
   requested: number;
   extra: string | null;
-  osmOnly: boolean;
+  /** Откуда брать бизнесы: OSM (основной) или Яндекс (тестовая интеграция). */
+  source: LeadSource;
   /** «Найти ещё»: продолжение этого поиска с пропуском уже найденного. */
   parent?: LeadSearch | null;
 }
@@ -42,6 +45,8 @@ export interface SearchJobHooks {
   onFinish?: (search: LeadSearch, info: { outcome: SearchOutcome; breakdown: Awaited<ReturnType<typeof potentialBreakdown>> }) => Promise<void> | void;
   onError?: (search: LeadSearch | null, error: unknown) => Promise<void> | void;
 }
+
+export type LeadSource = "osm" | "yandex";
 
 export type StartSearchResult = { status: "started"; search: LeadSearch } | { status: "busy" } | { status: "not_configured" };
 
@@ -53,7 +58,7 @@ export async function isSearchBusy(workspaceId: string): Promise<boolean> {
 }
 
 export async function startSearchJob(params: StartSearchParams, hooks: SearchJobHooks = {}): Promise<StartSearchResult> {
-  if (!params.osmOnly && !isYandexConfigured()) return { status: "not_configured" };
+  if (params.source === "yandex" && !isYandexConfigured()) return { status: "not_configured" };
   if (await isSearchBusy(params.workspaceId)) return { status: "busy" };
 
   runningWorkspaces.add(params.workspaceId);
@@ -67,7 +72,7 @@ export async function startSearchJob(params: StartSearchParams, hooks: SearchJob
       city: params.city,
       requested: params.requested,
       extra: params.extra,
-      osmOnly: params.osmOnly,
+      source: params.source,
       parentId: params.parent?.id,
       offset: params.parent?.nextOffset ?? 0,
     });
@@ -78,7 +83,7 @@ export async function startSearchJob(params: StartSearchParams, hooks: SearchJob
 
   publish({ type: "leads_changed", workspaceId: params.workspaceId });
   void runSearchJob(search, hooks)
-    .catch((err) => console.error("Lead search job crashed:", err))
+    .catch((err) => console.error("Lead search job crashed:", redactError(err)))
     .finally(() => runningWorkspaces.delete(params.workspaceId));
   return { status: "started", search };
 }
@@ -89,7 +94,7 @@ async function runSearchJob(search: LeadSearch, hooks: SearchJobHooks) {
   const flush = async () => {
     if (!dirty || !latest) return;
     dirty = false;
-    await updateSearchProgress(search.id, latest).catch((err) => console.error("Search progress update failed:", err));
+    await updateSearchProgress(search.id, latest).catch((err) => console.error("Search progress update failed:", redactError(err)));
   };
   const timer = setInterval(() => void flush(), 1500);
 
@@ -106,7 +111,7 @@ async function runSearchJob(search: LeadSearch, hooks: SearchJobHooks) {
         city: search.city,
         requested: search.requested,
         requirements: parseRequirements(search.extra),
-        osmOnly: search.osmOnly,
+        osmOnly: search.source !== "yandex",
         offset: search.nextOffset,
         excludeExisting: isMore,
         excludeKeys,
@@ -115,8 +120,9 @@ async function runSearchJob(search: LeadSearch, hooks: SearchJobHooks) {
         yandexConfigured: isYandexConfigured(),
         osmEnabled: leadsConfig.osmEnabled,
         yandex: searchYandex,
-        osm: searchOsm,
+        osm: searchOsmBest,
         audit: (url) => auditWebsite(url),
+        contacts: (draft) => enrichContacts(draft),
         index,
         onProgress: (p) => {
           latest = p;
@@ -135,7 +141,7 @@ async function runSearchJob(search: LeadSearch, hooks: SearchJobHooks) {
   } catch (err) {
     clearInterval(timer);
     const warnings = (latest as SearchProgress | null)?.warnings ?? [];
-    const message = err instanceof Error ? err.message : String(err);
+    const message = redact(err instanceof Error ? err.message : String(err));
     const failed = await failLeadSearch(search.id, message, warnings).catch(() => null);
     publish({ type: "leads_changed", workspaceId: search.workspaceId });
     await hooks.onError?.(failed, err);

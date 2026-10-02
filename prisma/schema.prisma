@@ -240,7 +240,8 @@ model Notification {
 // ---------------------------------------------------------------------------
 
 enum LeadStatus {
-  NEW         // 🆕 Новый
+  FOUND       // 🔎 Найден — результат поиска, ещё не разобран
+  NEW         // 🆕 Новый — сохранён / взят в работу
   TO_CONTACT  // 📩 Связаться
   CONTACTED   // 💬 Написали
   WAITING     // ⏳ Ждём ответа
@@ -314,6 +315,9 @@ model Lead {
   workspace     Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   searchResults LeadSearchResult[]
   tasks         LeadTask[]
+  contacts      LeadContact[]
+  events        LeadEvent[]
+  outreach      Outreach[]
 
   @@unique([workspaceId, yandexId])
   @@unique([workspaceId, osmId])
@@ -334,11 +338,15 @@ model LeadSearch {
   requested   Int
   extra       String? // «Дополнительно» как ввёл пользователь
   osmOnly     Boolean          @default(false)
+  source      String           @default("osm") // osm | yandex — откуда брали бизнесы
   parentId    String?
   status      LeadSearchStatus @default(RUNNING)
   found       Int              @default(0)
   checked     Int              @default(0)
   filtered    Int              @default(0)
+  candidates  Int              @default(0) // сколько бизнесов нашли источники (до проверки)
+  withEmail   Int              @default(0) // подходящих лидов с публичным email
+  needsReview Int              @default(0) // email только 🟡 или сайт не удалось проверить
   stage       String? // что делается сейчас («Проверяю сайты…») — для прогресса в приложении
   nextOffset  Int              @default(0) // смещение в выдаче источника для «Найти ещё»
   warnings    Json? // ["Не удалось получить данные из OSM", ...]
@@ -369,10 +377,12 @@ model LeadSearchResult {
 
 // Связь «лид → задача». Таблица Task не меняется: связь живёт здесь.
 model LeadTask {
-  id        String   @id @default(cuid())
-  leadId    String
-  taskId    String   @unique
-  createdAt DateTime @default(now())
+  id         String       @id @default(cuid())
+  leadId     String
+  taskId     String       @unique
+  kind       LeadTaskKind @default(CONTACT)
+  outreachId String? // для follow-up — к какому обращению относится (этап 2)
+  createdAt  DateTime     @default(now())
 
   lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
@@ -381,8 +391,196 @@ model LeadTask {
 }
 
 model LeadSettings {
-  workspaceId String @id
-  avgCheck    Int    @default(50000) // средний чек, ₽ — только для расчёта в статистике
+  workspaceId   String  @id
+  avgCheck      Int     @default(50000) // средний чек, ₽ — только для расчёта в статистике
+  senderName    String? // подпись в предложениях: имя
+  companyName   String? // студия / компания
+  portfolioUrl  String?
+  senderContact String? // телефон или Telegram для подписи
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+enum LeadTaskKind {
+  CONTACT   // «Связаться с …»
+  FOLLOW_UP // напоминание после обращения (этап 2)
+}
+
+// ---------------------------------------------------------------------------
+// Контакты лида с источником и проверкой. Сейчас — только email бизнеса;
+// телефоны и соцсети переедут сюда позже (та же таблица, kind = PHONE/SOCIAL).
+// Lead.emails остаётся кешем принятых по правилам адресов — для списков.
+// ---------------------------------------------------------------------------
+
+enum ContactKind {
+  EMAIL
+  PHONE
+  SOCIAL
+}
+
+enum ContactSource {
+  OSM
+  YANDEX
+  SITE
+  MANUAL
+}
+
+enum EmailCheck {
+  VALID      // 🟢 формат, MX и домен совпадает с сайтом компании
+  UNVERIFIED // 🟡 найден, но не подтверждён (другой домен, бесплатная почта, DNS не ответил)
+  INVALID    // 🔴 битый формат или у домена нет почты
+}
+
+model LeadContact {
+  id           String        @id @default(cuid())
+  workspaceId  String
+  leadId       String
+  kind         ContactKind
+  value        String
+  normalized   String // для поиска дублей
+  role         String? // почему признан адресом компании: "info", "sales", "brand"…
+  sourceType   ContactSource
+  sourceUrl    String? // страница, где найден
+  verification EmailCheck?
+  checkNote    String? // «MX есть, домен совпадает с сайтом»
+  checkedAt    DateTime?
+  isPrimary    Boolean       @default(false)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  lead     Lead       @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  outreach Outreach[]
+
+  @@unique([leadId, kind, normalized])
+  @@index([workspaceId, kind])
+}
+
+// История лида: из неё строятся аналитика и «Сегодня» (этап 2).
+enum LeadEventType {
+  FOUND
+  SAVED
+  STATUS_CHANGED
+  CONTACT_FOUND
+  TASK_CREATED
+  OUTREACH_DRAFTED
+  OUTREACH_SENT
+  REPLY_RECEIVED
+  FOLLOWUP_SET
+  FOLLOWUP_DONE
+}
+
+model LeadEvent {
+  id          String        @id @default(cuid())
+  workspaceId String
+  leadId      String
+  actorId     String? // пользователь; null — система (поиск)
+  type        LeadEventType
+  fromStatus  LeadStatus?
+  toStatus    LeadStatus?
+  meta        Json?
+  createdAt   DateTime      @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([leadId, createdAt])
+  @@index([workspaceId, type, createdAt])
+}
+
+// Обращение к лиду. Сейчас сюда пишутся черновики «✨ предложения»;
+// редактор, каналы, отправка и follow-up — этап 2. Отправка — только руками.
+enum OutreachChannel {
+  EMAIL
+  TELEGRAM
+  WHATSAPP
+  SOCIAL
+}
+
+enum OutreachStatus {
+  DRAFT     // 📝 Черновик
+  READY     // 📤 Готово к отправке
+  SENT      // 📨 Отправлено
+  WAITING   // ⏳ Ждём ответа
+  REPLIED   // 👀 Ответ получен
+  FOLLOW_UP // 🔁 Follow-up
+  REJECTED  // ❌ Отказ
+  CLIENT    // 🤝 Клиент
+}
+
+model Outreach {
+  id          String          @id @default(cuid())
+  workspaceId String
+  leadId      String
+  createdById String?
+  channel     OutreachChannel
+  status      OutreachStatus  @default(DRAFT)
+  recipient   String? // email / телефон / ссылка
+  contactId   String?
+  subject     String?
+  body        String
+  generator   String // "template" сейчас, "claude" — когда подключим
+  variant     Int             @default(0)
+  sentAt      DateTime?
+  repliedAt   DateTime?
+  followUpAt  DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  lead    Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  contact LeadContact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([leadId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Локальная копия OpenStreetMap — основной источник бизнесов. Общая для всех
+// пространств; наполняется scripts/osm-import.ts (раз в неделю, вся Россия).
+// Данные © участники OpenStreetMap, лицензия ODbL.
+// ---------------------------------------------------------------------------
+
+model OsmPlace {
+  id         String   @id // "node/123", "way/456", "relation/789"
+  name       String
+  lat        Float
+  lon        Float
+  kinds      String[] // ["shop=hairdresser", "amenity=dentist"] — по ним ищется ниша
+  tags       Json // нужные теги: адрес, контакты, часы, уточнения ниши
+  phone      String?
+  website    String?
+  email      String?
+  hasContact Boolean
+  importId   String
+  updatedAt  DateTime @updatedAt
+
+  @@index([kinds], type: Gin)
+  @@index([lat, lon])
+  @@index([importId])
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "OsmPlace_name_trgm_idx") // «своя ниша»: поиск по названию
+}
+
+model OsmImport {
+  id         String    @id @default(cuid())
+  regions    String[]
+  status     String // RUNNING | DONE | FAILED
+  sourceDate DateTime? // дата выгрузки Geofabrik (Last-Modified)
+  places     Int       @default(0)
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  error      String?
+}
+
+// Границы городов/регионов для поиска по локальной копии OSM:
+// определяются через Nominatim один раз и хранятся навсегда.
+model OsmArea {
+  key       String   @id // нормализованный запрос пользователя
+  name      String // как назвал Nominatim
+  kind      String // city | region
+  south     Float
+  west      Float
+  north     Float
+  east      Float
+  geometry  Json? // упрощённый контур (GeoJSON Polygon/MultiPolygon); нет — ищем по прямоугольнику
+  source    String   @default("nominatim")
+  createdAt DateTime @default(now())
 }

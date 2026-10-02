@@ -67,5 +67,26 @@ services:
           sleep 60
         done
 
+  # Локальная копия OpenStreetMap — основной источник бизнесов для поиска
+  # клиентов. Раз в неделю скачивает выгрузку Geofabrik (вся Россия ≈ 4 ГБ),
+  # отбирает бизнесы и обновляет таблицу OsmPlace. Первый импорт — ~20–40 мин.
+  osm-import:
+    build:
+      context: .
+      dockerfile: Dockerfile.osm
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://tandem:tandem@db:5432/tandem
+      NODE_ENV: production
+      OSM_DATA_DIR: /data
+      OSM_REGIONS: ${OSM_REGIONS:-russia}
+    volumes:
+      - osm_data:/data
+
 volumes:
   tandem_db_data:
+  osm_data:

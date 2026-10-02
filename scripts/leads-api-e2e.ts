@@ -6,7 +6,7 @@
 //   E2E_DATABASE_URL=postgresql://postgres:tandem@localhost:5432/tandem_e2e npx tsx scripts/leads-api-e2e.ts
 
 import { execSync } from "node:child_process";
-import { fakeSourcesEnv, startFakeSourcesServer } from "./lib/fake-sources";
+import { fakeSourcesEnv, seedLocalOsm, startFakeSourcesServer } from "./lib/fake-sources";
 
 const E2E_DB = process.env.E2E_DATABASE_URL ?? "postgresql://postgres:tandem@localhost:5432/tandem_e2e?schema=public";
 
@@ -82,8 +82,9 @@ async function main() {
     const bad = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "", city: "Москва", requested: 5 });
     check("валидация: пустая ниша → 400", bad.status === 400);
 
-    const s1 = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Москва", requested: 5 });
-    check("POST /searches → 201, поиск идёт в фоне", s1.status === 201 && s1.json.search.status === "RUNNING", s1.json);
+    // Яндекс — тестовая интеграция (source: "yandex"); по умолчанию поиск идёт по OSM
+    const s1 = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Москва", requested: 5, source: "yandex" });
+    check("POST /searches → 201, поиск идёт в фоне", s1.status === 201 && s1.json.search.status === "RUNNING" && s1.json.search.source === "yandex", s1.json);
     const busy = await call(searches.POST as Handler, "POST", "/api/leads/searches", 2, { niche: "Барбершопы", city: "Казань", requested: 5 });
     check("второй поиск в пространстве, пока идёт первый → 409 busy", busy.status === 409 && busy.json.error === "busy", busy);
     m = await call(meta.GET as Handler, "GET", "/api/leads/meta", 2);
@@ -91,9 +92,16 @@ async function main() {
 
     const d1 = await waitDone(s1.json.search.id);
     check("поиск завершён: 5 лидов, разбивка 2/3/0", d1.json.search.status === "DONE" && d1.json.leads.length === 5 && d1.json.search.breakdown.high === 2 && d1.json.search.breakdown.medium === 3, d1.json.search);
+    check("счётчики поиска: бизнесов, с email", d1.json.search.candidates >= 5 && d1.json.search.withEmail === 1 && d1.json.search.needsReview === 1, d1.json.search);
     const first = d1.json.leads[0];
     check("лиды отсортированы: первый — Black Barber 95/100", first.name === "Black Barber" && first.score === 95, first);
     check("DTO лида: сайт, контакты, соцсети, причины, источники", first.site.kind === "none" && first.emails[0] === "hello@blackbarber.ru" && first.socials[0].label === "Instagram" && first.reasons.length > 3 && first.sources.length === 2, first);
+    check(
+      "DTO: email с проверкой и источником",
+      first.contacts.length === 1 && first.contacts[0].check === "UNVERIFIED" && first.contacts[0].checkLabel === "Найден, не подтверждён" && first.contacts[0].sourceLabel === "OpenStreetMap" && first.contacts[0].primary,
+      first.contacts
+    );
+    check("новые лиды — статус FOUND", d1.json.leads.every((l: { status: string }) => l.status === "FOUND"));
     const insta = d1.json.leads.find((l: { name: string }) => l.name === "Insta Cuts");
     check("нет email → пустой список (в интерфейсе «Не найден»)", insta && insta.emails.length === 0 && insta.site.kind === "social");
 
@@ -106,6 +114,11 @@ async function main() {
     // ===== статус, сохранение =====
     const p1 = await call(lead.PATCH as Handler, "PATCH", `/api/leads/${insta.id}`, 1, { status: "NEGOTIATION", saved: true }, { id: insta.id });
     check("PATCH статус + сохранение", p1.status === 200 && p1.json.lead.status === "NEGOTIATION" && p1.json.lead.saved === true);
+    check(
+      "история: смена статуса и сохранение записаны с автором",
+      (await prisma.leadEvent.count({ where: { leadId: insta.id, type: "STATUS_CHANGED", fromStatus: "FOUND", toStatus: "NEGOTIATION", actorId: { not: null } } })) === 1 &&
+        (await prisma.leadEvent.count({ where: { leadId: insta.id, type: "SAVED" } })) === 1
+    );
     const badStatus = await call(lead.PATCH as Handler, "PATCH", `/api/leads/${insta.id}`, 1, { status: "WHATEVER" }, { id: insta.id });
     check("неизвестный статус → 400", badStatus.status === 400);
     list = await call(leads.GET as Handler, "GET", "/api/leads?filter=g&q=inst", 1);
@@ -119,6 +132,8 @@ async function main() {
     const pr = await call(proposal.POST as Handler, "POST", `/api/leads/${insta.id}/proposal`, 1, undefined, { id: insta.id });
     check("✨ предложение по фактам", pr.status === 200 && pr.json.text.startsWith("Здравствуйте!") && pr.json.text.includes("Instagram") && !pr.json.text.includes("@"), pr.json);
     check("предложение сохранено в лиде", (await prisma.lead.findUnique({ where: { id: insta.id } }))?.proposal === pr.json.text);
+    check("предложение: тема письма; адресата нет — email не найден", !!pr.json.subject && pr.json.recipient === null, pr.json);
+    check("черновик обращения (Outreach DRAFT)", (await prisma.outreach.count({ where: { leadId: insta.id, status: "DRAFT", channel: "EMAIL" } })) === 1);
 
     // ===== задача из лида =====
     const t1 = await call(task.POST as Handler, "POST", `/api/leads/${insta.id}/task`, 1, {}, { id: insta.id });
@@ -140,27 +155,27 @@ async function main() {
       d2.json.leads.length === 4 && d2.json.leads.every((l: { name: string }) => !firstNames.has(l.name)),
       d2.json.leads.map((l: { name: string }) => l.name)
     );
-    const again = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Москва", requested: 5 });
+    const again = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Москва", requested: 5, source: "yandex" });
     const d3 = await waitDone(again.json.search.id);
     check("повторный поиск: дубли не создаются", (await prisma.lead.count()) === 9 && d3.json.search.breakdown.existing === 5, d3.json.search);
 
     // ===== отказы источников =====
     sources.state.osmMode = "500";
-    const s4 = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Казань", requested: 5 });
+    const s4 = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Казань", requested: 5, source: "yandex" });
     const d4 = await waitDone(s4.json.search.id);
     check("OSM недоступен → предупреждение, поиск продолжился", d4.json.search.status === "DONE" && d4.json.search.warnings.join().includes("OpenStreetMap") && d4.json.leads.length === 2, d4.json.search);
     sources.state.osmMode = "ok";
 
     process.env.YANDEX_PLACES_API_KEY = "";
-    const nc = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Москва", requested: 5 });
-    check("без ключа Яндекса → 400 not_configured", nc.status === 400 && nc.json.error === "not_configured");
+    const nc = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Москва", requested: 5, source: "yandex" });
+    check("Яндекс без ключа → 400 not_configured", nc.status === 400 && nc.json.error === "not_configured");
     m = await call(meta.GET as Handler, "GET", "/api/leads/meta", 1);
     check("meta сообщает, что Яндекс не подключён", m.json.yandex === false);
 
     sources.state.osmMode = "500";
-    const s5 = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Москва", requested: 5, osmOnly: true });
+    const s5 = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { niche: "Барбершопы", city: "Москва", requested: 5 });
     const d5 = await waitDone(s5.json.search.id);
-    check("только OSM, OSM лежит → понятная ошибка", d5.json.search.status === "FAILED" && d5.json.search.error.includes("OpenStreetMap сейчас не отвечает"), d5.json.search);
+    check("по умолчанию — OSM; Overpass лежит, локальной копии нет → понятная ошибка", d5.json.search.source === "osm" && d5.json.search.status === "FAILED" && d5.json.search.error.includes("Не удалось выполнить поиск по OpenStreetMap"), d5.json.search);
     sources.state.osmMode = "ok";
     const retry = await call(searches.POST as Handler, "POST", "/api/leads/searches", 1, { fromSearchId: s5.json.search.id, mode: "retry" });
     const d6 = await waitDone(retry.json.search.id);
@@ -182,6 +197,34 @@ async function main() {
     const noAuth2 = await leads.GET(new Request("http://localhost/api/leads"));
     process.env.ALLOW_DEV_AUTH = "true";
     check("без авторизации Telegram → 401", noAuth2.status === 401, noAuth.status);
+
+    // ===== локальная копия OSM =====
+    await seedLocalOsm(prisma);
+    sources.state.osmMode = "500"; // Overpass не нужен
+    const s7 = await call(searches.POST as Handler, "POST", "/api/leads/searches", 2, { niche: "Барбершопы", city: "Москва", requested: 5 });
+    const d7 = await waitDone(s7.json.search.id, 2);
+    sources.state.osmMode = "ok";
+    const lv = d7.json.leads?.[0];
+    check(
+      "локальный OSM: в границах города, email со страницы «Контакты»",
+      d7.json.search.status === "DONE" && d7.json.search.candidates === 2 && d7.json.leads.length === 1 && lv?.name === "Lavka Barber" && d7.json.search.withEmail === 1 && d7.json.search.needsReview === 1,
+      d7.json.search
+    );
+    check(
+      "DTO: 🟡 info@ с сайта и 🔴 мёртвый домен; личный адрес не сохранён",
+      lv?.contacts.length === 2 &&
+        lv.contacts[0].value === "info@lavka-barber.ru" && lv.contacts[0].check === "UNVERIFIED" && lv.contacts[0].source === "SITE" && lv.contacts[0].primary &&
+        lv.contacts[1].check === "INVALID" && lv.emails.join() === "info@lavka-barber.ru",
+      lv?.contacts
+    );
+    const lt = await call(task.POST as Handler, "POST", `/api/leads/${lv.id}/task`, 2, {}, { id: lv.id });
+    const lvAfter = await call(lead.GET as Handler, "GET", `/api/leads/${lv.id}`, 1, undefined, { id: lv.id });
+    check("задача из найденного лида → статус «Связаться»", lt.status === 201 && lvAfter.json.lead.status === "TO_CONTACT", lvAfter.json.lead.status);
+    m = await call(meta.GET as Handler, "GET", "/api/leads/meta", 1);
+    check("meta: состояние локальной копии OSM", m.json.osmStatus.startsWith("локальная копия от"), m.json.osmStatus);
+    list = await call(leads.GET as Handler, "GET", "/api/leads?filter=d", 1);
+    check("фильтр «🔎 Найденные»", list.status === 200 && list.json.leads.every((l: { status: string }) => l.status === "FOUND"), list.json.total);
+
     const other = await prisma.workspace.create({ data: {} });
     const foreign = await prisma.lead.create({ data: { workspaceId: other.id, name: "Чужой", normName: "чужой", city: "Москва", niche: "x", sources: [] } });
     const f = await call(lead.GET as Handler, "GET", `/api/leads/${foreign.id}`, 1, undefined, { id: foreign.id });

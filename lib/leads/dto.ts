@@ -2,14 +2,27 @@
 // разворачиваются в понятные структуры, внутренние поля (нормализация,
 // ключи дублей) наружу не отдаются.
 
-import type { Lead, LeadSearch } from "@prisma/client";
-import type { LeadDTO, LeadSearchDTO, LeadSiteDTO } from "../../types/leads";
-import { SOURCE_LABELS, siteIssues } from "./labels";
+import type { Lead, LeadContact, LeadSearch } from "@prisma/client";
+import type { LeadContactDTO, LeadDTO, LeadSearchDTO, LeadSiteDTO } from "../../types/leads";
+import { CONTACT_SOURCE_LABELS, EMAIL_CHECK_LABELS, SOURCE_LABELS, siteIssues } from "./labels";
 import { isModernSite, socialLabel } from "./scoring";
 import { leadToDraft } from "./repository";
 import type { ScoreReason, SiteAudit, SocialLink, SourceRef, WebsiteKind } from "./types";
 
-type LeadWithTaskLinks = Lead & { tasks?: { task: { id: string; title: string; createdAt: Date } }[] };
+type LeadWithTaskLinks = Lead & { tasks?: { task: { id: string; title: string; createdAt: Date } }[]; contacts?: LeadContact[] };
+
+function contactDTO(c: LeadContact): LeadContactDTO {
+  return {
+    value: c.value,
+    check: c.verification,
+    checkLabel: c.verification ? EMAIL_CHECK_LABELS[c.verification] : null,
+    note: c.checkNote,
+    source: c.sourceType,
+    sourceLabel: CONTACT_SOURCE_LABELS[c.sourceType],
+    sourceUrl: c.sourceUrl,
+    primary: c.isPrimary,
+  };
+}
 
 function siteOf(lead: Lead): LeadSiteDTO {
   const audit = (lead.siteAudit as unknown as SiteAudit | null) ?? null;
@@ -41,6 +54,7 @@ export function toLeadDTO(lead: LeadWithTaskLinks): LeadDTO {
     site: siteOf(lead),
     phones: lead.phones,
     emails: lead.emails,
+    contacts: (lead.contacts ?? []).filter((c) => c.kind === "EMAIL").map(contactDTO),
     socials: socials.map((s) => ({ type: s.type, label: socialLabel(s.type), url: s.url })),
     hours: lead.hours,
     sources: sources.map((s) => ({ provider: s.provider, label: SOURCE_LABELS[s.provider] ?? s.provider, url: s.url })),
@@ -64,11 +78,15 @@ export function toSearchDTO(s: LeadSearch, breakdown: LeadSearchDTO["breakdown"]
     requested: s.requested,
     extra: s.extra,
     osmOnly: s.osmOnly,
+    source: s.source === "yandex" ? "yandex" : "osm",
     parentId: s.parentId,
     status: s.status,
+    candidates: s.candidates,
     found: s.found,
     checked: s.checked,
     filtered: s.filtered,
+    withEmail: s.withEmail,
+    needsReview: s.needsReview,
     stage: s.stage,
     warnings: (s.warnings as string[] | null) ?? [],
     error: s.error,

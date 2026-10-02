@@ -4,6 +4,7 @@
 // ответил — предупреждение и работа с тем, что есть; если не ответил никто —
 // понятная ошибка.
 
+import { bestCheck } from "./contacts";
 import { LeadIndex, rejectKey } from "./dedupe";
 import { applyAudit, applyChainSizes, candidateToDraft, enrichWithOsm, findOsmMatch } from "./merge";
 import type { NicheSpec } from "./niches";
@@ -27,10 +28,13 @@ export interface SearchInput {
 
 export interface SearchProgress {
   stage: string;
-  found: number;
+  candidates: number; // сколько бизнесов нашли источники
+  found: number; // подходят
   target: number;
   checked: number;
   filtered: number;
+  withEmail: number; // подходящих с публичным email
+  needsReview: number; // из них email только 🟡 — стоит проверить вручную
   warnings: string[];
 }
 
@@ -43,8 +47,11 @@ export interface AcceptedLead {
 
 export interface SearchOutcome {
   accepted: AcceptedLead[];
+  candidates: number;
   checked: number;
   filtered: number;
+  withEmail: number;
+  needsReview: number;
   skippedKnown: number;
   rejectedKeys: string[];
   nextOffset: number;
@@ -57,8 +64,11 @@ export interface SearchDeps {
   yandexConfigured: boolean;
   osmEnabled: boolean;
   yandex: (p: { text: string; skip: number }) => Promise<{ items: BusinessCandidate[] }>;
-  osm: (niche: NicheSpec, city: string, opts?: { budgetMs?: number }) => Promise<BusinessCandidate[]>;
+  /** Локальная копия OSM (или Overpass, пока её нет); note — пояснение для пользователя. */
+  osm: (niche: NicheSpec, city: string, opts?: { budgetMs?: number }) => Promise<BusinessCandidate[] | { items: BusinessCandidate[]; note?: string }>;
   audit: (url: string) => Promise<SiteAudit>;
+  /** Email для отобранного лида: страницы контактов сайта + проверка адресов. */
+  contacts?: (draft: LeadDraft) => Promise<void>;
   index: LeadIndex;
   onProgress?: (p: SearchProgress) => void;
   now?: Date;
@@ -77,7 +87,17 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 export async function runLeadSearch(input: SearchInput, deps: SearchDeps): Promise<SearchOutcome> {
   const now = deps.now ?? new Date();
   const warnings: string[] = [];
-  const progress: SearchProgress = { stage: "", found: 0, target: input.requested, checked: 0, filtered: 0, warnings };
+  const progress: SearchProgress = {
+    stage: "",
+    candidates: 0,
+    found: 0,
+    target: input.requested,
+    checked: 0,
+    filtered: 0,
+    withEmail: 0,
+    needsReview: 0,
+    warnings,
+  };
   const report = (stage?: string) => {
     if (stage) progress.stage = stage;
     deps.onProgress?.({ ...progress, warnings: [...warnings] });
@@ -130,13 +150,15 @@ export async function runLeadSearch(input: SearchInput, deps: SearchDeps): Promi
     report(useYandex ? "Сверяю с OpenStreetMap…" : "Ищу в OpenStreetMap…");
     try {
       // OSM как дополнение к Яндексу не должен задерживать поиск: ждём его недолго.
-      osmItems = await deps.osm(input.niche, input.city, { budgetMs: useYandex ? OSM_SUPPLEMENT_BUDGET_MS : OSM_ONLY_BUDGET_MS });
+      const res = await deps.osm(input.niche, input.city, { budgetMs: useYandex ? OSM_SUPPLEMENT_BUDGET_MS : OSM_ONLY_BUDGET_MS });
+      osmItems = Array.isArray(res) ? res : res.items;
+      if (!Array.isArray(res) && res.note) warnings.push(res.note);
       osmOk = true;
     } catch (err) {
       if (!useYandex) {
         throw new SearchFailedError(
           (input.osmOnly
-            ? "OpenStreetMap сейчас не отвечает — его публичные серверы перегружены. Попробуй повторить через несколько минут. Надёжнее всего подключить ключ Яндекса — это основной источник."
+            ? "Не удалось выполнить поиск по OpenStreetMap. Попробуй повторить через несколько минут."
             : "Не удалось получить данные ни из Яндекса, ни из OpenStreetMap. Попробуй повторить через несколько минут.") +
             `\n\nПодробности: ${errMsg(err)}`
         );
@@ -196,6 +218,8 @@ export async function runLeadSearch(input: SearchInput, deps: SearchDeps): Promi
       ia - ib
   );
 
+  progress.candidates = queue.length;
+
   // --- 6. проверка сайтов и отбор (несколько параллельно, бот при этом не ждёт) ---
   report("Проверяю бизнесы и сайты…");
   // Лимит — только на загрузку сайтов (сеть, до 10 с каждый); остальное считается мгновенно.
@@ -206,9 +230,13 @@ export async function runLeadSearch(input: SearchInput, deps: SearchDeps): Promi
   const processed = new Set<number>();
   let skippedKnown = 0;
   let cursor = 0;
+  // Места в подборке резервируются по порядку очереди: пока кандидат проверяется
+  // (сайт, страницы контактов), следующий не может занять его место, даже если
+  // проверится быстрее. Освобождается место только при отказе.
+  let inFlight = 0;
 
   const worker = async () => {
-    while (cursor < queue.length && accepted.length < input.requested) {
+    while (cursor < queue.length && accepted.length + inFlight < input.requested) {
       const [origIdx, d] = queue[cursor++]!;
       const key = rejectKey(d);
       const existing = deps.index.find(d);
@@ -220,11 +248,22 @@ export async function runLeadSearch(input: SearchInput, deps: SearchDeps): Promi
       const needsAudit = d.websiteKind === "own" && !!d.website && !input.requirements.noOwnSite;
       if (needsAudit && audits >= maxAudits) continue; // не проверили — останется для «Найти ещё»
       progress.checked++;
-      if (needsAudit) {
-        audits++;
-        applyAudit(d, await deps.audit(d.website!));
+      inFlight++;
+      let result;
+      try {
+        if (needsAudit) {
+          audits++;
+          applyAudit(d, await deps.audit(d.website!));
+        }
+        result = scoreLead(d, input.requirements, now);
+        // email ищем только у подходящих (или когда без email бизнес не подходит) — это ещё до 3 страниц сайта
+        if (deps.contacts && (!result.reject || (input.requirements.requireEmail && !d.emails.length && d.audit?.status === "ok"))) {
+          await deps.contacts(d);
+          result = scoreLead(d, input.requirements, now);
+        }
+      } finally {
+        inFlight--;
       }
-      const result = scoreLead(d, input.requirements, now);
       if (result.reject) {
         progress.filtered++;
         rejectedKeys.push(key);
@@ -232,9 +271,11 @@ export async function runLeadSearch(input: SearchInput, deps: SearchDeps): Promi
       } else if (accepted.length < input.requested) {
         accepted.push({ draft: d, result, offer: buildOfferPlan(d, input.niche), existingId: existing?.id ?? null });
         progress.found = accepted.length;
+        const best = bestCheck(d.contacts);
+        if (best && best !== "INVALID") progress.withEmail++;
+        if (best === "UNVERIFIED") progress.needsReview++;
         processed.add(origIdx);
       }
-      // подходящий, но лишний (набрали нужное параллельно) — не помечаем, найдётся в «Найти ещё»
       report();
     }
   };
@@ -250,8 +291,11 @@ export async function runLeadSearch(input: SearchInput, deps: SearchDeps): Promi
 
   return {
     accepted,
+    candidates: progress.candidates,
     checked: progress.checked,
     filtered: progress.filtered,
+    withEmail: progress.withEmail,
+    needsReview: progress.needsReview,
     skippedKnown,
     rejectedKeys,
     nextOffset,

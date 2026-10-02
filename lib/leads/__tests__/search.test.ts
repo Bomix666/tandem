@@ -16,7 +16,16 @@ const YANDEX: BusinessCandidate[] = [
   makeCandidate({ externalId: "6", name: "Химки Барбер", address: "Россия, Московская область, Химки", phones: ["+7 495 000-00-06"] }),
 ];
 const OSM: BusinessCandidate[] = [
-  makeCandidate({ provider: "osm", externalId: "node/1", name: "Без сайта", lat: 55.7001, lon: 37.6001, phones: [], emails: ["hello@gmail.com"], sourceUrl: "osm1" }),
+  makeCandidate({
+    provider: "osm",
+    externalId: "node/1",
+    name: "Без сайта",
+    lat: 55.7001,
+    lon: 37.6001,
+    phones: [],
+    emails: ["bezsayta@gmail.com", "ivan.petrov@mail.ru"], // второй — личный, не сохраняем
+    sourceUrl: "osm1",
+  }),
 ];
 const AUDITS: Record<string, SiteAudit> = {
   "http://old.ru/": makeAudit({ url: "http://old.ru/", https: false, hasViewport: false, hasForm: false, copyrightYear: 2014 }),
@@ -74,7 +83,8 @@ describe("runLeadSearch", () => {
     const out = await runLeadSearch(input(), deps());
     const noSite = out.accepted.find((a) => a.draft.name === "Без сайта")!;
     expect(noSite.draft.confirmedByOsm).toBe(true);
-    expect(noSite.draft.emails).toEqual(["hello@gmail.com"]);
+    expect(noSite.draft.emails).toEqual(["bezsayta@gmail.com"]);
+    expect(noSite.draft.contacts).toEqual([{ value: "bezsayta@gmail.com", source: "osm", sourceUrl: "osm1", role: "brand" }]);
     const insta = out.accepted.find((a) => a.draft.name === "Инста Барбер")!;
     expect(insta.draft.emails).toEqual([]);
   });
@@ -168,8 +178,8 @@ describe("runLeadSearch", () => {
       (e: unknown) => e
     )) as Error;
     expect(err).toBeInstanceOf(SearchFailedError);
-    expect(err.message).toContain("OpenStreetMap сейчас не отвечает");
-    expect(err.message).toContain("ключ Яндекса");
+    expect(err.message).toContain("Не удалось выполнить поиск по OpenStreetMap");
+    expect(err.message).toContain("серверы OpenStreetMap не отвечают");
   });
 
   it("отклонённые кандидаты попадают в список, чтобы «Найти ещё» их не перепроверял", async () => {
