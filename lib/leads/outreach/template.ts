@@ -17,9 +17,8 @@ function subjects(f: LeadFacts): string[] {
   return [`Сайт для «${f.name}»`, `Предложение для «${f.name}»`, `Идея для «${f.name}»`];
 }
 
-function signature(s: SenderProfile, short: boolean): string[] {
+function signature(s: SenderProfile): string[] {
   const who = [s.name, s.company].filter(Boolean).join(", ");
-  if (short) return who ? [who] : [];
   return [who || null, s.portfolioUrl ? `Портфолио: ${s.portfolioUrl}` : null, s.contact || null].filter((l): l is string => !!l);
 }
 
@@ -37,19 +36,34 @@ const CLOSINGS = [
   "Могу бесплатно набросать концепцию — показать?",
 ];
 
-function messenger(f: LeadFacts, s: SenderProfile, variant: number): string {
-  const sign = signature(s, true);
+const intro = (s: SenderProfile) => (s.name ? `Меня зовут ${s.name}${s.company ? `, ${s.company}` : ""}. ` : "");
+
+/** Telegram — коротко: кто, о чём, что видим, что предлагаем. */
+function telegram(f: LeadFacts, s: SenderProfile, variant: number): string {
   return [
-    `${pick(GREETINGS, variant)} ${sign.length ? `Меня зовут ${s.name ?? sign[0]}. ` : ""}Пишу по поводу ${f.nicheAccusative} «${f.name}».`,
+    `${pick(GREETINGS, variant)} ${intro(s)}Пишу по поводу ${f.nicheAccusative} «${f.name}».`,
     observation(f),
     shortOffer(f),
     pick(CLOSINGS, variant),
   ].join("\n\n");
 }
 
+/** WhatsApp — коротко и по-разговорному, одним-двумя абзацами. */
+function whatsapp(f: LeadFacts, s: SenderProfile, variant: number): string {
+  const hello = pick(["Здравствуйте! 👋", "Добрый день!", "Здравствуйте!"], variant);
+  return [`${hello} ${intro(s)}${observation(f)}`, `${shortOffer(f)} ${pick(["Показать пример?", "Интересно посмотреть пример?", "Прислать пример?"], variant)}`].join("\n\n");
+}
+
+/** Соцсети — очень коротко: одно сообщение в пару предложений. */
+function social(f: LeadFacts, s: SenderProfile, variant: number): string {
+  const items = f.offer.items.slice(0, 2).map((i) => i.instr).join(" и ");
+  const offer = f.offer.kind === "new_site" ? `Могу сделать для «${f.name}» сайт с ${items}.` : `Могу обновить сайт «${f.name}».`;
+  return `${pick(GREETINGS, variant)} ${intro(s)}${offer} ${pick(["Показать пример?", "Интересно?", "Прислать пример?"], variant)}`;
+}
+
 function email(f: LeadFacts, s: SenderProfile, variant: number): string {
   const body = renderTemplateProposal(f).replace(/^Здравствуйте!/, pick(GREETINGS, variant));
-  const sign = signature(s, false);
+  const sign = signature(s);
   return sign.length ? `${body}\n\n—\n${sign.join("\n")}` : body;
 }
 
@@ -61,9 +75,11 @@ function render(channel: OutreachChannel, req: OutreachRequest): OutreachText {
     case "EMAIL":
       return { subject: pick(subjects(f), variant), body: email(f, s, variant), warnings };
     case "TELEGRAM":
+      return { body: telegram(f, s, variant), warnings };
     case "WHATSAPP":
+      return { body: whatsapp(f, s, variant), warnings };
     case "SOCIAL":
-      return { body: messenger(f, s, variant), warnings };
+      return { body: social(f, s, variant), warnings };
   }
 }
 

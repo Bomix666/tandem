@@ -1,6 +1,6 @@
 // Подписи статусов и потенциала — общие для бота и описаний задач.
 
-import type { ContactSource, EmailCheck, LeadStatus } from "@prisma/client";
+import type { ContactSource, EmailCheck, LeadStatus, OutreachChannel, OutreachStatus } from "@prisma/client";
 import type { Potential, ScoreReason, SiteAudit } from "./types";
 
 /** Проблемы сайта, найденные проверкой, — короткими фразами для карточки. */
@@ -33,7 +33,7 @@ export const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
   FOUND: "Найден",
   NEW: "Новый",
   TO_CONTACT: "Связаться",
-  CONTACTED: "Написали",
+  CONTACTED: "Связались",
   WAITING: "Ждём ответа",
   NEGOTIATION: "Переговоры",
   CLIENT: "Клиент",
@@ -45,15 +45,41 @@ export const LEAD_STATUS_EMOJI: Record<LeadStatus, string> = {
   FOUND: "🔎",
   NEW: "🆕",
   TO_CONTACT: "📩",
-  CONTACTED: "💬",
+  CONTACTED: "📨",
   WAITING: "⏳",
-  NEGOTIATION: "🤝",
-  CLIENT: "💰",
+  NEGOTIATION: "💬",
+  CLIENT: "🤝",
   REJECTED: "❌",
   NOT_FIT: "🚫",
 };
 
 export const statusText = (s: LeadStatus) => `${LEAD_STATUS_EMOJI[s]} ${LEAD_STATUS_LABELS[s]}`;
+
+// Обращения (Outreach CRM)
+export const OUTREACH_STATUS_LABELS: Record<OutreachStatus, string> = {
+  DRAFT: "Черновик",
+  READY: "Готово к отправке",
+  SENT: "Отправлено",
+  WAITING: "Ждём ответа",
+  REPLIED: "Ответ получен",
+  FOLLOW_UP: "Follow-up",
+  REJECTED: "Отказ",
+  CLIENT: "Клиент",
+};
+export const OUTREACH_STATUS_EMOJI: Record<OutreachStatus, string> = {
+  DRAFT: "📝",
+  READY: "📤",
+  SENT: "📨",
+  WAITING: "⏳",
+  REPLIED: "👀",
+  FOLLOW_UP: "🔁",
+  REJECTED: "❌",
+  CLIENT: "🤝",
+};
+export const outreachStatusText = (s: OutreachStatus) => `${OUTREACH_STATUS_EMOJI[s]} ${OUTREACH_STATUS_LABELS[s]}`;
+
+export const CHANNEL_LABELS: Record<OutreachChannel, string> = { EMAIL: "Email", TELEGRAM: "Telegram", WHATSAPP: "WhatsApp", SOCIAL: "Соцсети" };
+export const CHANNEL_EMOJI: Record<OutreachChannel, string> = { EMAIL: "📧", TELEGRAM: "💬", WHATSAPP: "📱", SOCIAL: "🌐" };
 
 export const EMAIL_CHECK_LABELS: Record<EmailCheck, string> = {
   VALID: "Подтверждён",

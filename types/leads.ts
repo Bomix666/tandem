@@ -3,8 +3,8 @@
 
 export type LeadStatusDTO = "FOUND" | "NEW" | "TO_CONTACT" | "CONTACTED" | "WAITING" | "NEGOTIATION" | "CLIENT" | "REJECTED" | "NOT_FIT";
 export type PotentialDTO = "HIGH" | "MEDIUM" | "LOW";
-/** a — все, f — сохранённые, d — найденные, n — новые, t — связаться, g — переговоры, c — клиенты, r — отказы. */
-export type LeadFilterDTO = "a" | "f" | "d" | "n" | "t" | "g" | "c" | "r";
+/** a — все, h — горячие, f — сохранённые, d — найденные, n — новые, t — связаться, w — ждут ответа, g — переговоры, c — клиенты, r — отказы. */
+export type LeadFilterDTO = "a" | "h" | "f" | "d" | "n" | "t" | "w" | "g" | "c" | "r";
 
 /** Email лида: откуда взят и как проверен (🟢 VALID / 🟡 UNVERIFIED / 🔴 INVALID). */
 export interface LeadContactDTO {

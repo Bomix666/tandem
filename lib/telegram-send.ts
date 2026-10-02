@@ -1,6 +1,15 @@
-const API_BASE = "https://api.telegram.org";
+// TELEGRAM_API_ROOT — свой Bot API (или тестовый стенд), как у бота.
+const apiBase = () => (process.env.TELEGRAM_API_ROOT?.trim() || "https://api.telegram.org").replace(/\/$/, "");
 
-export async function sendTelegramMessage(telegramId: bigint | number, text: string, openAppButton = true) {
+/**
+ * `openAppButton` — кнопка «Open Tandem» (по умолчанию) или свои inline-кнопки
+ * (`{ inlineKeyboard }`, например у напоминания ⏰ FOLLOW-UP).
+ */
+export async function sendTelegramMessage(
+  telegramId: bigint | number,
+  text: string,
+  openAppButton: boolean | { inlineKeyboard: unknown[][] } = true
+) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not configured");
 
@@ -10,13 +19,15 @@ export async function sendTelegramMessage(telegramId: bigint | number, text: str
     parse_mode: "HTML",
   };
 
-  if (openAppButton && process.env.TELEGRAM_WEBAPP_URL) {
+  if (typeof openAppButton === "object") {
+    body.reply_markup = { inline_keyboard: openAppButton.inlineKeyboard };
+  } else if (openAppButton && process.env.TELEGRAM_WEBAPP_URL) {
     body.reply_markup = {
       inline_keyboard: [[{ text: "Open Tandem", web_app: { url: process.env.TELEGRAM_WEBAPP_URL } }]],
     };
   }
 
-  const res = await fetch(`${API_BASE}/bot${token}/sendMessage`, {
+  const res = await fetch(`${apiBase()}/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

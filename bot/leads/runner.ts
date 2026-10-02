@@ -83,7 +83,7 @@ export async function launchSearch(api: Api, p: LaunchParams): Promise<"started"
 export function searchNav(searchId: string, position: number, total: number): Nav {
   const next = position + 1;
   return next < total
-    ? { label: "➡️ Следующий", data: `ld:nx:s:${searchId}:${next}` }
+    ? { label: "Следующий ›", data: `ld:nx:s:${searchId}:${next}` }
     : { label: "🏁 Последний в подборке", data: `ld:nx:s:${searchId}:${next}` };
 }
 

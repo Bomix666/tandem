@@ -138,6 +138,7 @@ function startBot(withYandex: boolean) {
     DATABASE_URL: E2E_DB,
     TELEGRAM_BOT_TOKEN: TOKEN,
     TELEGRAM_WEBAPP_URL: "https://example.test",
+    APP_URL: "https://example.test", // не из .env: Prisma подмешивает его в окружение
     TELEGRAM_API_ROOT: `http://127.0.0.1:${port}`,
     ...fakeSourcesEnv(port, withYandex),
   };
@@ -269,8 +270,14 @@ async function main() {
     let mark = calls.length;
     sendText("/start");
     const menu = await waitMessage(mark, (m) => !!m.reply_markup?.keyboard, "главное меню");
+    const home0 = await waitMessage(mark, (m) => m.text.includes("SALES OS"), "дашборд Sales OS");
     const menuButtons = menu.reply_markup!.keyboard!.flat().map((b) => b.text);
-    check("/start: главное меню с новыми кнопками", ["📋 Задачи", "➕ Новая задача", "🔎 Найти клиентов", "❤️ Мои лиды", "🕘 История поиска", "📊 Статистика", "⚙️ Настройки"].every((b) => menuButtons.includes(b)), menuButtons.join(", "));
+    check(
+      "/start: меню Sales OS",
+      ["🚀 Sales OS", "🔎 Найти клиентов", "👥 Мои лиды", "📨 Outreach", "⏰ Follow-up", "📊 Аналитика", "📋 Задачи", "➕ Задача", "⚙️ Настройки"].every((b) => menuButtons.includes(b)),
+      menuButtons.join(", ")
+    );
+    check("/start: дашборд с реальными нулями, без выдуманной статистики", /Новых лидов\s+0/.test(home0.text) && home0.text.includes("БЛИЖАЙШЕЕ ДЕЙСТВИЕ"), home0.text);
     check("/start: кнопка «Open Tandem» осталась", calls.slice(mark).some((c) => JSON.stringify(c.body.reply_markup ?? "").includes("Open Tandem")));
 
     mark = calls.length;
@@ -279,17 +286,17 @@ async function main() {
     check("/task создаёт задачу как раньше", (await prisma.task.count({ where: { workspaceId: ws.id } })) === 1);
 
     mark = calls.length;
-    sendText("➕ Новая задача");
+    sendText("➕ Задача");
     await waitMessage(mark, (m) => m.text.includes("Напиши задачу"), "подсказка новой задачи");
     mark = calls.length;
     sendText("Задача из меню");
     await waitMessage(mark, (m) => m.text.startsWith("Создана задача «Задача из меню»"), "задача из меню");
-    check("«➕ Новая задача» из меню создаёт задачу", (await prisma.task.count({ where: { workspaceId: ws.id } })) === 2);
+    check("«➕ Задача» из меню создаёт задачу", (await prisma.task.count({ where: { workspaceId: ws.id } })) === 2);
 
     mark = calls.length;
     sendText("📋 Задачи");
-    const tasksMsg = await waitMessage(mark, (m) => m.text.startsWith("АКТИВНЫХ"), "список задач");
-    check("«📋 Задачи» = /tasks", tasksMsg.text.includes("АКТИВНЫХ: 2"), tasksMsg.text);
+    const tasksMsg = await waitMessage(mark, (m) => m.text.includes("📋 <b>ЗАДАЧИ</b>"), "список задач");
+    check("«📋 Задачи» — экран задач Sales OS", tasksMsg.text.includes("активных 2") && tasksMsg.text.includes("Проверить старый функционал"), tasksMsg.text);
 
     // ===== поиск клиентов =====
     // Яндекс — тестовая интеграция (кнопка 🧪); локальной копии OSM пока нет — дополнение идёт через Overpass
@@ -317,21 +324,28 @@ async function main() {
     check("лид без контактов не сохранён", !leads1.some((l) => l.name === "Ghost Barber"));
     check("сеть помечена", leads1.filter((l) => l.name === "Barber Chain").every((l) => JSON.stringify(l.scoreReasons).includes("похоже на сеть")));
 
-    const card1 = await waitMessage(s1.mark, (m) => m.text.includes("ЛИД #1"), "первая карточка");
+    const card1 = await waitMessage(s1.mark, (m) => m.text.includes("LEAD #1"), "первая карточка");
     check("карточка #1 — лучший лид (Black Barber, 95/100)", card1.text.includes("Black Barber") && card1.text.includes("95/100"), card1.text.slice(0, 200));
     check("карточка: email с отметкой проверки и источником", card1.text.includes("🟡 hello@blackbarber.ru — найден, не подтверждён · <a href="), card1.text);
-    check("карточка: кнопки из ТЗ", ["🌐 Сайт", "📱 Соцсети", "📞 Контакты", "✨ Создать предложение", "➕ Создать задачу", "❤️ Сохранить лид", "➡️ Следующий"].every((t) => buttons(card1.message_id).some((b) => b.text === t)));
+    check(
+      "карточка: кнопки из ТЗ",
+      ["✨ Подготовить письмо", "💬 Сообщение", "➕ Создать задачу", "⏰ Follow-up", "❤️ Сохранить", "📌 Статус", "📍 Источник", "🏠 Меню", "Следующий ›"].every((t) =>
+        buttons(card1.message_id).some((b) => b.text === t)
+      ),
+      buttons(card1.message_id).map((b) => b.text).join(" | ")
+    );
+    check("карточка: блоки ТЗ — Lead Score, возможность, статус", card1.text.includes("🎯 <b>Lead Score</b> 95/100") && card1.text.includes("💡 <b>Возможность</b>") && card1.text.includes("<b>СТАТУС</b>  🔎 Найден"), card1.text);
 
     mark = calls.length;
-    press(card1.message_id, "➡️ Следующий");
-    const card2 = await waitMessage(mark, (m) => m.message_id === card1.message_id && m.text.includes("ЛИД #2"), "следующий лид");
+    press(card1.message_id, "Следующий ›");
+    const card2 = await waitMessage(mark, (m) => m.message_id === card1.message_id && m.text.includes("LEAD #2"), "следующий лид");
     check("«Следующий» листает подборку в том же сообщении", !!card2);
-    check("нет email — «Не найден», а не выдуманный", card2.text.includes("📧 <b>Email:</b>\nНе найден"), card2.text);
+    check("нет email — «Не найден», а не выдуманный", card2.text.includes("📧 <b>Email</b>\nНе найден"), card2.text);
 
     // сохранить
     mark = calls.length;
-    press(card1.message_id, "❤️ Сохранить лид");
-    await waitMessage(mark, (m) => m.message_id === card1.message_id && buttons(m.message_id).some((b) => b.text === "💔 Убрать из сохранённых"), "сохранение");
+    press(card1.message_id, "❤️ Сохранить");
+    await waitMessage(mark, (m) => m.message_id === card1.message_id && buttons(m.message_id).some((b) => b.text === "💔 Убрать"), "сохранение");
     const savedLead = await prisma.lead.findFirst({ where: { workspaceId: ws.id, saved: true } });
     check("❤️ Сохранить лид", !!savedLead);
     check("сохранение берёт лид в работу: 🔎 Найден → 🆕 Новый", savedLead?.status === "NEW", savedLead?.status);
@@ -344,21 +358,57 @@ async function main() {
     await waitMessage(mark, (m) => m.message_id === card1.message_id && buttons(m.message_id).some((b) => b.text.includes("Переговоры")), "выбор статуса");
     mark = calls.length;
     press(card1.message_id, /Переговоры$/);
-    const afterStatus = await waitMessage(mark, (m) => m.message_id === card1.message_id && m.text.includes("📌 Статус: 🤝 Переговоры"), "статус в карточке");
+    const afterStatus = await waitMessage(mark, (m) => m.message_id === card1.message_id && m.text.includes("<b>СТАТУС</b>  💬 Переговоры"), "статус в карточке");
     check("статус меняется из Telegram", (await prisma.lead.findUnique({ where: { id: card2Lead.id } }))?.status === "NEGOTIATION");
     check("история: смена статуса записана", (await prisma.leadEvent.count({ where: { leadId: card2Lead.id, type: "STATUS_CHANGED", toStatus: "NEGOTIATION" } })) === 1);
-    check("после смены статуса «Следующий» сохранился", buttons(afterStatus.message_id).some((b) => b.text === "➡️ Следующий"));
+    check("после смены статуса «Следующий» сохранился", buttons(afterStatus.message_id).some((b) => b.text === "Следующий ›"));
 
     // предложение
     mark = calls.length;
-    press(card1.message_id, "✨ Создать предложение");
-    const proposal = await waitMessage(mark, (m) => m.text.startsWith("Здравствуйте!"), "текст предложения");
-    check("✨ предложение по фактам лида", proposal.text.includes("Обратил внимание на ваш барбершоп") && !proposal.text.includes("@"), proposal.text);
+    press(card1.message_id, "✨ Подготовить письмо");
+    const proposal = await waitMessage(mark, (m) => m.message_id === card1.message_id && m.text.includes("📧 <b>EMAIL</b>"), "редактор письма");
+    check("✨ письмо по фактам лида — в той же карточке, без новых сообщений", proposal.text.includes("Обратил внимание на ваш барбершоп") && !calls.slice(mark).some((c) => c.method === "sendMessage"), proposal.text);
+    check("редактор: черновик, «Кому», тема, кнопки ТЗ", proposal.text.includes("📝 Черновик") && proposal.text.includes("Кому: <i>email не найден</i>") && proposal.text.includes("Тема: <b>") && ["✏️ Редактировать", "📋 Копировать", "🔄 Другой вариант", "✅ Я отправил", "❌ Отмена", "‹ К лиду"].every((t) => buttons(card1.message_id).some((b) => b.text === t)), buttons(card1.message_id).map((b) => b.text).join(" | "));
+    check("нет email — нет кнопки «Открыть почту»", !buttons(card1.message_id).some((b) => b.text.includes("Открыть почту")));
     check("предложение сохранено в лиде", !!(await prisma.lead.findUnique({ where: { id: card2Lead.id } }))?.proposal);
-    check("пометка «шаблон, AI не подключён»", calls.slice(mark).some((c) => String(c.body.text ?? "").includes("AI не подключён")));
+    check("пометка «шаблон, AI не подключён»", proposal.text.includes("AI не подключён"));
     const draft1 = await prisma.outreach.findFirst({ where: { leadId: card2Lead.id } });
     check("предложение = черновик обращения (Outreach DRAFT), ничего не отправлено", draft1?.status === "DRAFT" && draft1.channel === "EMAIL" && !draft1.sentAt, JSON.stringify(draft1));
     check("история: OUTREACH_DRAFTED", (await prisma.leadEvent.count({ where: { leadId: card2Lead.id, type: "OUTREACH_DRAFTED" } })) === 1);
+
+    // без дублей: «‹ К лиду» → «✉️ Открыть письмо» открывает тот же черновик; «🔄» — новая формулировка в той же записи
+    mark = calls.length;
+    press(card1.message_id, "‹ К лиду");
+    await waitMessage(mark, (m) => m.message_id === card1.message_id && buttons(m.message_id).some((b) => b.text === "✉️ Открыть письмо"), "карточка с черновиком");
+    mark = calls.length;
+    press(card1.message_id, "✉️ Открыть письмо");
+    const reopened = await waitMessage(mark, (m) => m.message_id === card1.message_id && m.text.includes("Открыт сохранённый черновик"), "тот же черновик");
+    check("повторное «письмо» открывает тот же черновик", !!reopened && (await prisma.outreach.count({ where: { leadId: card2Lead.id } })) === 1);
+    mark = calls.length;
+    press(card1.message_id, "🔄 Другой вариант");
+    await waitMessage(mark, (m) => m.message_id === card1.message_id && m.text.includes("Новый вариант текста"), "другой вариант");
+    const variant = await prisma.outreach.findFirstOrThrow({ where: { leadId: card2Lead.id } });
+    check("🔄 другой вариант — в той же записи", variant.variant === 1 && (await prisma.outreach.count({ where: { leadId: card2Lead.id } })) === 1 && variant.body !== draft1!.body);
+
+    // ✏️ свой текст с темой
+    mark = calls.length;
+    press(card1.message_id, "✏️ Редактировать");
+    await waitMessage(mark, (m) => m.text.includes("Пришли новый текст"), "запрос текста");
+    mark = calls.length;
+    sendText("Тема: Сайт для вашего барбершопа\n\nДобрый день! Это мой собственный текст письма для проверки.");
+    const edited = await waitMessage(mark, (m) => m.text.includes("Текст обновлён"), "обновлённый редактор");
+    const editedRow = await prisma.outreach.findFirstOrThrow({ where: { leadId: card2Lead.id } });
+    check("✏️ свой текст и тема сохранены", editedRow.subject === "Сайт для вашего барбершопа" && editedRow.body.startsWith("Добрый день! Это мой") && editedRow.generator === "manual", JSON.stringify(editedRow));
+    check("✏️ редактор показан заново с новым текстом", edited.text.includes("Тема: <b>Сайт для вашего барбершопа</b>") && edited.text.includes("Текст отредактирован вручную"), edited.text);
+    mark = calls.length;
+    press(edited.message_id, "📋 Копировать");
+    const copy = await waitMessage(mark, (m) => m.text.includes("Текст для копирования"), "текст для копирования");
+    check("📋 копирование — текст в блоке, тема кнопкой", copy.text.includes("<pre>Добрый день! Это мой") && JSON.stringify(copy.reply_markup).includes("copy_text"), copy.text);
+    mark = calls.length;
+    press(edited.message_id, "‹ К лиду");
+    await waitMessage(mark, (m) => m.message_id === edited.message_id && m.text.includes("LEAD"), "карточка из редактора");
+    const card1Id = card1.message_id;
+    card1.message_id = edited.message_id; // дальше работаем с карточкой в новом сообщении
 
     // задача из лида
     mark = calls.length;
@@ -369,6 +419,7 @@ async function main() {
     check("в задаче все данные лида", !!leadTasks[0]?.task.description?.includes("Тип: Продажа сайта") && !!leadTasks[0]?.task.description?.includes("Статус лида: Переговоры"));
     check("задача видна в общем списке задач", (await prisma.task.count({ where: { workspaceId: ws.id } })) === 3);
     check("в ленте активности есть запись", (await prisma.taskActivity.count({ where: { workspaceId: ws.id, type: "task_created" } })) === 1);
+    void card1Id;
     check("задача не откатывает лид назад по воронке (Переговоры остаются)", (await prisma.lead.findUnique({ where: { id: card2Lead.id } }))?.status === "NEGOTIATION");
     check("связь лид ↔ задача: тип CONTACT, событие TASK_CREATED", leadTasks[0]?.kind === "CONTACT" && (await prisma.leadEvent.count({ where: { leadId: card2Lead.id, type: "TASK_CREATED" } })) === 1);
 
@@ -381,11 +432,6 @@ async function main() {
     await waitMessage(mark, (m) => m.text.includes("Задача создана"), "вторая задача");
     check("по явному подтверждению — вторая задача", (await prisma.leadTask.count({ where: { leadId: card2Lead.id } })) === 2);
 
-    // контакты / соцсети
-    mark = calls.length;
-    press(card1.message_id, "📞 Контакты");
-    const contacts = await waitMessage(mark, (m) => m.text.includes("Контакты «"), "контакты");
-    check("📞 Контакты", contacts.text.includes("Телефон:") && contacts.text.includes("Email:"));
 
     // ===== дубли =====
     const s2 = await runWizard({ nicheButton: "Барбершопы", city: "Москва", count: "5", start: "🧪 Искать через Яндекс (тест)" });
@@ -431,25 +477,25 @@ async function main() {
 
     // ===== мои лиды / история / статистика / настройки =====
     mark = calls.length;
-    sendText("❤️ Мои лиды");
-    const list = await waitMessage(mark, (m) => m.text.includes("МОИ ЛИДЫ"), "мои лиды");
+    sendText("👥 Мои лиды");
+    const list = await waitMessage(mark, (m) => m.text.includes("👥 <b>ЛИДЫ</b>"), "мои лиды");
     const total = await prisma.lead.count({ where: { workspaceId: ws.id } });
-    check("❤️ Мои лиды: все лиды", list.text.includes(`Всего: ${total}`), list.text.slice(0, 120));
+    check("👥 Мои лиды: все лиды", list.text.includes(`Всего: <b>${total}</b>`), list.text.slice(0, 160));
     mark = calls.length;
-    press(list.message_id, "🤝");
+    press(list.message_id, "💬");
     const neg = await waitMessage(mark, (m) => m.message_id === list.message_id && m.text.includes("Переговоры"), "фильтр переговоры");
-    check("фильтр «Переговоры»", neg.text.includes("Всего: 1") && neg.text.includes(card2Lead.name), neg.text);
+    check("фильтр «Переговоры»", neg.text.includes("Всего: <b>1</b>") && neg.text.includes(card2Lead.name), neg.text);
     mark = calls.length;
     press(list.message_id, "🔍 Поиск");
     await waitMessage(mark, (m) => m.text.includes("часть названия"), "запрос поиска");
     mark = calls.length;
     sendText("insta");
-    const found = await waitMessage(mark, (m) => m.text.includes("МОИ ЛИДЫ") && m.text.includes("«insta»"), "поиск по названию");
-    check("поиск по названию", found.text.includes("Insta Cuts") && found.text.includes("Всего: 1"), found.text);
+    const found = await waitMessage(mark, (m) => m.text.includes("👥 <b>ЛИДЫ</b>") && m.text.includes("«insta»"), "поиск по названию");
+    check("поиск по названию", found.text.includes("Insta Cuts") && found.text.includes("Всего: <b>1</b>"), found.text);
     mark = calls.length;
     press(found.message_id, /Insta Cuts/);
-    const opened = await waitMessage(mark, (m) => m.text.includes("🏢 <b>Название:</b>\nInsta Cuts"), "открыть лид из списка");
-    check("открытие лида из списка", !!opened);
+    const opened = await waitMessage(mark, (m) => m.text.includes("🏢 <b>Insta Cuts</b>"), "открыть лид из списка");
+    check("открытие лида из списка — в том же сообщении", opened.message_id === found.message_id);
 
     mark = calls.length;
     sendText("🕘 История поиска");
@@ -461,11 +507,15 @@ async function main() {
     check("открытие поиска из истории", buttons(histOpen.message_id).some((b) => b.text === "👀 Смотреть лиды"));
 
     mark = calls.length;
-    sendText("📊 Статистика");
-    const stats = await waitMessage(mark, (m) => m.text.includes("📊 <b>ЛИДЫ</b>"), "статистика");
-    check("📊 Статистика", stats.text.includes(`Всего: ${total}`) && stats.text.includes("🤝 Переговоры: 1") && stats.text.includes("не гарантированный доход"), stats.text);
+    sendText("📊 Статистика"); // старая кнопка меню ведёт в аналитику
+    const stats = await waitMessage(mark, (m) => m.text.includes("📊 <b>АНАЛИТИКА</b>"), "аналитика");
+    check(
+      "📊 Аналитика: воронка и коэффициенты по реальным данным",
+      new RegExp(`Всего лидов\\s+${total}\\b`).test(stats.text) && /Переговоры\s+1\b/.test(stats.text) && stats.text.includes("Contact rate") && stats.text.includes("не гарантированный доход"),
+      stats.text
+    );
     mark = calls.length;
-    press(stats.message_id, "✏️ Изменить средний чек");
+    press(stats.message_id, "✏️ Средний чек");
     await waitMessage(mark, (m) => m.text.includes("средний чек"), "запрос среднего чека");
     mark = calls.length;
     sendText("75 000");
@@ -538,23 +588,27 @@ async function main() {
       JSON.stringify(lavka?.contacts.map((c) => [c.value, c.verification, c.sourceType]))
     );
     check("Lead.emails — только пригодные адреса", lavka?.emails.join() === "info@lavka-barber.ru", lavka?.emails.join());
-    const lavkaCard = await waitMessage(s7.mark, (m) => m.text.includes("Lavka Barber") && m.text.includes("ЛИД #1"), "карточка Lavka");
+    const lavkaCard = await waitMessage(s7.mark, (m) => m.text.includes("Lavka Barber") && m.text.includes("LEAD #1"), "карточка Lavka");
     check(
       "карточка: 🟡 и 🔴 email с источником «сайт компании»",
       lavkaCard.text.includes("🟡 info@lavka-barber.ru — найден, не подтверждён · <a href=") && lavkaCard.text.includes("🔴 zakaz@lavkabarber.com — некорректный"),
       lavkaCard.text
     );
-    check("карточка: статус «🔎 Найден»", lavkaCard.text.includes("📌 Статус: 🔎 Найден"), lavkaCard.text);
+    check("карточка: статус «🔎 Найден»", lavkaCard.text.includes("<b>СТАТУС</b>  🔎 Найден"), lavkaCard.text);
 
     mark = calls.length;
-    press(lavkaCard.message_id, "✨ Создать предложение");
-    const lavkaHead = await waitMessage(mark, (m) => m.text.includes("Предложение для «Lavka Barber»"), "предложение Lavka");
-    const lavkaText = await waitMessage(mark, (m) => m.text.startsWith("Здравствуйте!"), "текст Lavka");
-    check("предложение: адресат — лучший проверенный email, тема письма", lavkaHead.text.includes("Кому: 🟡 info@lavka-barber.ru") && lavkaHead.text.includes("Тема:"), lavkaHead.text);
-    check("предложение: подпись из настроек", lavkaText.text.endsWith("—\nНикита"), lavkaText.text);
+    press(lavkaCard.message_id, "✨ Подготовить письмо");
+    const lavkaHead = await waitMessage(mark, (m) => m.message_id === lavkaCard.message_id && m.text.includes("📧 <b>EMAIL</b>"), "письмо Lavka");
+    check("письмо: адресат — лучший проверенный email, тема письма", lavkaHead.text.includes("Кому: 🟡 info@lavka-barber.ru") && lavkaHead.text.includes("Тема:"), lavkaHead.text);
+    check("письмо: подпись из настроек", lavkaHead.text.includes("—\nНикита</blockquote>"), lavkaHead.text);
+    const mailBtn = buttons(lavkaCard.message_id).find((b) => b.text === "📨 Открыть почту");
+    check("📨 «Открыть почту» — подписанная ссылка приложения (Telegram не открывает mailto:)", !!mailBtn?.url && /^https:\/\/example\.test\/go\/mail\/\w+\?t=[0-9a-f]{24}$/.test(mailBtn.url), mailBtn?.url);
     const lavkaDraft = await prisma.outreach.findFirst({ where: { leadId: lavka!.id }, include: { contact: true } });
     check("Outreach связан с email-контактом", lavkaDraft?.recipient === "info@lavka-barber.ru" && lavkaDraft.contact?.value === "info@lavka-barber.ru" && lavkaDraft.status === "DRAFT");
 
+    mark = calls.length;
+    press(lavkaCard.message_id, "‹ К лиду");
+    await waitMessage(mark, (m) => m.message_id === lavkaCard.message_id && m.text.includes("LEAD"), "карточка Lavka снова");
     mark = calls.length;
     press(lavkaCard.message_id, "➕ Создать задачу");
     await waitMessage(mark, (m) => m.text.includes("Задача создана"), "задача Lavka");
@@ -567,8 +621,158 @@ async function main() {
     );
     const lavkaTask = await prisma.leadTask.findFirst({ where: { leadId: lavka!.id }, include: { task: true } });
     check("в описании задачи email с отметкой проверки", !!lavkaTask?.task.description?.includes("info@lavka-barber.ru 🟡"), lavkaTask?.task.description ?? "");
-    const reCard = await waitMessage(mark, (m) => m.message_id === lavkaCard.message_id && m.text.includes("📌 Статус: 📩 Связаться"), "карточка обновилась");
-    check("карточка обновилась: «📩 Связаться» · есть задача", reCard.text.includes("✅ есть задача"));
+    const reCard = await waitMessage(mark, (m) => m.message_id === lavkaCard.message_id && m.text.includes("<b>СТАТУС</b>  📩 Связаться"), "карточка обновилась");
+    check("карточка обновилась: «📩 Связаться» · задача · письмо-черновик", reCard.text.includes("📋 задача") && reCard.text.includes("📧 Email: 📝 Черновик"), reCard.text);
+
+    // ===== Sales OS: отправка руками → follow-up → напоминание → ответ → клиент =====
+    const { daysFromNow } = await import("../lib/leads/time");
+    mark = calls.length;
+    press(lavkaCard.message_id, "✉️ Открыть письмо");
+    await waitMessage(mark, (m) => m.message_id === lavkaCard.message_id && m.text.includes("📧 <b>EMAIL</b>"), "письмо Lavka снова");
+    mark = calls.length;
+    press(lavkaCard.message_id, "✅ Я отправил");
+    const picker = await waitMessage(mark, (m) => m.message_id === lavkaCard.message_id && m.text.includes("Отмечено как отправленное"), "выбор follow-up");
+    const sentRow = await prisma.outreach.findFirstOrThrow({ where: { leadId: lavka!.id } });
+    const lavkaSent = await prisma.lead.findUniqueOrThrow({ where: { id: lavka!.id } });
+    check("✅ отправил: обращение «📨 Отправлено», лид «📨 Связались»", sentRow.status === "SENT" && !!sentRow.sentAt && lavkaSent.status === "CONTACTED", `${sentRow.status} ${lavkaSent.status}`);
+    check("✅ отправил: задача «Связаться» выполнена", (await prisma.task.findUniqueOrThrow({ where: { id: lavkaTask!.taskId } })).status === "DONE");
+    check("выбор follow-up: 2/5/7 дней, своя дата, без напоминания", ["Через 2 дня", "Через 5 дней", "Через 7 дней", "📅 Своя дата", "Без напоминания"].every((t) => buttons(picker.message_id).some((b) => b.text === t)));
+    mark = calls.length;
+    press(picker.message_id, "Через 2 дня");
+    await waitMessage(mark, (m) => m.message_id === picker.message_id && m.text.includes("Follow-up поставлен"), "follow-up поставлен");
+    const fu1 = await prisma.leadTask.findFirstOrThrow({ where: { leadId: lavka!.id, kind: "FOLLOW_UP" }, include: { task: true } });
+    check("follow-up = задача в таск-менеджере со сроком через 2 дня в 10:00", fu1.task.title === "Follow-up: Lavka Barber" && fu1.task.deadlineAt.getTime() === daysFromNow(2).getTime() && fu1.outreachId === sentRow.id, fu1.task.deadlineAt.toISOString());
+    const waiting = await prisma.outreach.findUniqueOrThrow({ where: { id: sentRow.id } });
+    check("обращение и лид — «⏳ Ждём ответа»", waiting.status === "WAITING" && waiting.followUpAt?.getTime() === fu1.task.deadlineAt.getTime() && (await prisma.lead.findUniqueOrThrow({ where: { id: lavka!.id } })).status === "WAITING");
+    check("напоминание запланировано (одно, без лишних «за 24 часа»)", (await prisma.notification.count({ where: { taskId: fu1.taskId } })) === 1 && (await prisma.notification.count({ where: { taskId: fu1.taskId, type: "lead_followup" } })) === 1);
+
+    // follow-up из карточки: та же задача переносится, дубля нет
+    mark = calls.length;
+    press(picker.message_id, "👀 Открыть лид");
+    const lavkaCard2 = await waitMessage(mark, (m) => m.message_id === picker.message_id && m.text.includes("⏰ follow-up"), "карточка с follow-up");
+    mark = calls.length;
+    press(lavkaCard2.message_id, "⏰ Follow-up ✓");
+    await waitMessage(mark, (m) => m.message_id === lavkaCard2.message_id && m.text.includes("Сейчас стоит"), "текущая дата follow-up");
+    mark = calls.length;
+    press(lavkaCard2.message_id, "Через 5 дней");
+    await waitMessage(mark, (m) => m.message_id === lavkaCard2.message_id && m.text.includes("Follow-up перенесён"), "follow-up перенесён");
+    check("повторный follow-up переносит задачу, а не создаёт дубль", (await prisma.leadTask.count({ where: { leadId: lavka!.id, kind: "FOLLOW_UP" } })) === 1 && (await prisma.task.findUniqueOrThrow({ where: { id: fu1.taskId } })).deadlineAt.getTime() === daysFromNow(5).getTime());
+
+    // своя дата: непонятная → подсказка, понятная → перенос
+    mark = calls.length;
+    press(lavkaCard2.message_id, "⏰ Follow-up");
+    await waitMessage(mark, (m) => m.message_id === lavkaCard2.message_id && m.text.includes("FOLLOW-UP"), "карточка follow-up");
+    mark = calls.length;
+    press(lavkaCard2.message_id, "⏰ Отложить");
+    await waitMessage(mark, (m) => m.message_id === lavkaCard2.message_id && m.text.includes("Отложить follow-up"), "отложить");
+    mark = calls.length;
+    press(lavkaCard2.message_id, "📅 Своя дата");
+    await waitMessage(mark, (m) => m.text.includes("Когда напомнить про «Lavka Barber»"), "запрос даты");
+    mark = calls.length;
+    sendText("вчера");
+    await waitMessage(mark, (m) => m.text.includes("Не понял дату"), "непонятная дата");
+    mark = calls.length;
+    sendText("через 3 дня");
+    await waitMessage(mark, (m) => m.text.includes("Follow-up перенесён"), "своя дата");
+    check("📅 своя дата «через 3 дня»", (await prisma.task.findUniqueOrThrow({ where: { id: fu1.taskId } })).deadlineAt.getTime() === daysFromNow(3).getTime());
+
+    // напоминание в срок: cron приложения присылает ⏰ FOLLOW-UP с кнопками
+    await prisma.notification.updateMany({ where: { taskId: fu1.taskId, type: "lead_followup" }, data: { scheduledFor: new Date(Date.now() - 1000) } });
+    Object.assign(process.env, { TELEGRAM_API_ROOT: `http://127.0.0.1:${port}`, TELEGRAM_BOT_TOKEN: TOKEN });
+    const { deliverDueNotifications, scheduleOverdueNotifications } = await import("../lib/notifications");
+    mark = calls.length;
+    await deliverDueNotifications();
+    const notice = await waitMessage(mark, (m) => m.text.includes("⏰ <b>FOLLOW-UP</b>"), "напоминание follow-up");
+    check(
+      "напоминание: лид, когда написали, следующее действие, кнопки",
+      notice.text.includes("Lavka Barber") && notice.text.includes("Написали: <b>") && notice.text.includes("Следующее действие") && ["👀 Открыть лид", "⏰ Отложить", "✅ Закрыть"].every((t) => buttons(notice.message_id).some((b) => b.text === t)),
+      notice.text
+    );
+    check("напоминание отмечено доставленным", !!(await prisma.notification.findFirst({ where: { taskId: fu1.taskId, type: "lead_followup" } }))?.sentAt);
+    await prisma.task.update({ where: { id: fu1.taskId }, data: { deadlineAt: new Date(Date.now() - 3600_000) } });
+    await scheduleOverdueNotifications();
+    check("просроченный follow-up не дублируется общим «задача просрочена»", (await prisma.notification.count({ where: { taskId: fu1.taskId, type: "task_overdue" } })) === 0);
+
+    mark = calls.length;
+    press(notice.message_id, "⏰ Отложить");
+    await waitMessage(mark, (m) => m.message_id === notice.message_id && m.text.includes("Отложить follow-up"), "отложить из напоминания");
+    mark = calls.length;
+    press(notice.message_id, "+1 день");
+    await waitMessage(mark, (m) => m.message_id === notice.message_id && m.text.includes("Follow-up перенесён"), "отложено");
+    const snoozed = await prisma.notification.findFirstOrThrow({ where: { taskId: fu1.taskId, type: "lead_followup" } });
+    check("⏰ отложить: новый срок и новое напоминание", snoozed.sentAt === null && snoozed.scheduledFor.getTime() === daysFromNow(1).getTime());
+
+    mark = calls.length;
+    press(notice.message_id, "⏰ Follow-up");
+    await waitMessage(mark, (m) => m.message_id === notice.message_id && m.text.includes("FOLLOW-UP"), "карточка follow-up");
+    mark = calls.length;
+    press(notice.message_id, "✅ Закрыть");
+    await waitMessage(mark, (m) => m.message_id === notice.message_id && m.text.includes("Чем закончилось"), "итог follow-up");
+    mark = calls.length;
+    press(notice.message_id, "👀 Ответили");
+    await waitMessage(mark, (m) => m.message_id === notice.message_id && m.text.includes("Follow-up закрыт"), "follow-up закрыт");
+    const replied = await prisma.outreach.findUniqueOrThrow({ where: { id: sentRow.id } });
+    check("👀 ответили: обращение «Ответ получен», лид «💬 Переговоры», задача закрыта", replied.status === "REPLIED" && !!replied.repliedAt && (await prisma.lead.findUniqueOrThrow({ where: { id: lavka!.id } })).status === "NEGOTIATION" && (await prisma.task.findUniqueOrThrow({ where: { id: fu1.taskId } })).status === "DONE");
+    check("история: отправлено, follow-up, ответ", (await prisma.leadEvent.count({ where: { leadId: lavka!.id, type: { in: ["OUTREACH_SENT", "FOLLOWUP_SET", "FOLLOWUP_DONE", "REPLY_RECEIVED"] } } })) >= 4);
+
+    // раздел Outreach: статусы, список, итог «клиент»
+    mark = calls.length;
+    sendText("📨 Outreach");
+    const out = await waitMessage(mark, (m) => m.text.includes("📨 <b>OUTREACH</b>"), "раздел Outreach");
+    check("📨 Outreach: счётчики по статусам", /Ответ получен\s+1\b/.test(out.text) && /Черновик\s+1\b/.test(out.text), out.text);
+    mark = calls.length;
+    press(out.message_id, "👀 Ответы · 1");
+    const outList = await waitMessage(mark, (m) => m.message_id === out.message_id && m.text.includes("Lavka Barber"), "список ответов");
+    mark = calls.length;
+    press(outList.message_id, /Lavka Barber/);
+    await waitMessage(mark, (m) => m.message_id === out.message_id && m.text.includes("👀 Ответ получен"), "обращение с ответом");
+    mark = calls.length;
+    press(out.message_id, "🤝 Клиент");
+    await waitMessage(mark, (m) => m.message_id === out.message_id && m.text.includes("🤝 Клиент"), "клиент");
+    check("🤝 клиент: обращение и лид", (await prisma.outreach.findUniqueOrThrow({ where: { id: sentRow.id } })).status === "CLIENT" && (await prisma.lead.findUniqueOrThrow({ where: { id: lavka!.id } })).status === "CLIENT");
+
+    // 💬 сообщение в другой канал: WhatsApp — короткий текст и ссылка wa.me; «❌ Отмена» удаляет черновик
+    mark = calls.length;
+    press(out.message_id, "‹ К лиду");
+    await waitMessage(mark, (m) => m.message_id === out.message_id && m.text.includes("🏢 <b>Lavka Barber</b>"), "карточка из Outreach");
+    mark = calls.length;
+    press(out.message_id, "💬 Сообщение");
+    await waitMessage(mark, (m) => m.message_id === out.message_id && m.text.includes("Выбери канал"), "выбор канала");
+    mark = calls.length;
+    press(out.message_id, "📱 WhatsApp");
+    const wa = await waitMessage(mark, (m) => m.message_id === out.message_id && m.text.includes("<b>WHATSAPP</b>"), "сообщение WhatsApp");
+    const waBtn = buttons(out.message_id).find((b) => b.text === "📱 Открыть WhatsApp");
+    const waRow = await prisma.outreach.findFirstOrThrow({ where: { leadId: lavka!.id, channel: "WHATSAPP" } });
+    check("📱 WhatsApp: короче письма, ссылка wa.me с текстом", waRow.body.length < sentRow.body.length && !!waBtn?.url?.startsWith("https://wa.me/74953330101?text="), `${waRow.body.length} vs ${sentRow.body.length} · ${waBtn?.url}`);
+    check("📱 WhatsApp: куда — номер телефона", wa.text.includes("Куда: +7"), wa.text);
+    mark = calls.length;
+    press(out.message_id, "❌ Отмена");
+    await waitMessage(mark, (m) => m.message_id === out.message_id && m.text.includes("🏢 <b>Lavka Barber</b>"), "отмена черновика");
+    check("❌ отмена удаляет только черновик", !(await prisma.outreach.count({ where: { leadId: lavka!.id, channel: "WHATSAPP" } })) && (await prisma.outreach.count({ where: { leadId: lavka!.id } })) === 1);
+
+    // дашборд: реальные цифры и ⚡ ближайшее действие (черновик письма card2Lead — отправить)
+    mark = calls.length;
+    sendText("🚀 Sales OS");
+    const dash = await waitMessage(mark, (m) => m.text.includes("🚀 <b>SALES OS</b>"), "дашборд");
+    check("дашборд: клиенты и outreach за сегодня из БД", /Клиенты\s+1\b/.test(dash.text) && dash.text.includes("отправлено") && /\b1 отправлено/.test(dash.text), dash.text);
+    check("⚡ ближайшее действие — отправить готовый черновик", dash.text.includes(`<b>${card2Lead.name}</b>\n→ отправить предложение`), dash.text);
+    mark = calls.length;
+    press(dash.message_id, "⚡ Открыть");
+    const jumped = await waitMessage(mark, (m) => m.message_id === dash.message_id && m.text.includes("📧 <b>EMAIL</b>"), "переход к черновику");
+    check("⚡ открывает нужный черновик", jumped.text.includes("Сайт для вашего барбершопа"), jumped.text);
+
+    mark = calls.length;
+    sendText("⏰ Follow-up");
+    const fuList = await waitMessage(mark, (m) => m.text.includes("⏰ <b>FOLLOW-UP</b>"), "список follow-up");
+    check("⏰ Follow-up: закрытые не показываются", fuList.text.includes("открытых 0"), fuList.text);
+    mark = calls.length;
+    sendText("📊 Аналитика");
+    const an = await waitMessage(mark, (m) => m.text.includes("📊 <b>АНАЛИТИКА</b>"), "аналитика");
+    check("📊 Аналитика: связались, ответили, клиенты, коэффициенты", /Связались\s+[1-9]/.test(an.text) && /Клиенты\s+1\b/.test(an.text) && /Reply rate\s+\d+%/.test(an.text), an.text);
+    mark = calls.length;
+    press(an.message_id, "7 дней");
+    const an7 = await waitMessage(mark, (m) => m.message_id === an.message_id && m.text.includes("АНАЛИТИКА"), "аналитика за 7 дней");
+    check("📊 период «7 дней»", an7.text.includes("за 7 дней"), an7.text);
 
     // ===== старые команды после всего =====
     mark = calls.length;
@@ -581,7 +785,7 @@ async function main() {
     check("в логе бота нет ошибок", !/Bot error|callback failed|crashed|Unhandled/i.test(botLog), botLog.slice(-800));
     check("лимит callback_data (64 байта) не превышен", calls.every((c) => !JSON.stringify(c.body.reply_markup ?? {}).match(/"callback_data":"([^"]{65,})"/)));
     const toasts = toastsSince(0).filter(Boolean);
-    check("всплывающие подсказки на кнопках", toasts.includes("❤️ Лид сохранён") && toasts.some((t) => t.startsWith("Статус:")), toasts.join(" | "));
+    check("всплывающие подсказки на кнопках", toasts.some((t) => t.startsWith("❤️ Лид сохранён")) && toasts.some((t) => t.startsWith("Статус:")), toasts.join(" | "));
   } catch (err) {
     check("сценарий выполнен без исключений", false, (err as Error).message);
   } finally {

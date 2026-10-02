@@ -350,16 +350,21 @@ export async function potentialBreakdown(searchId: string) {
 
 // ---------- «Мои лиды» ----------
 
-/** a — все, f — сохранённые, d — найденные, n — новые, t — связаться, g — переговоры, c — клиенты, r — отказы, q — поиск по названию. */
-export type LeadFilter = "a" | "f" | "d" | "n" | "t" | "g" | "c" | "r" | "q";
-export const LEAD_FILTERS: LeadFilter[] = ["a", "f", "d", "n", "t", "g", "c", "r", "q"];
+/**
+ * a — все, h — горячие, f — сохранённые, d — найденные, n — новые, t — связаться,
+ * w — связались / ждём ответа, g — переговоры, c — клиенты, r — отказы, q — поиск по названию.
+ */
+export type LeadFilter = "a" | "h" | "f" | "d" | "n" | "t" | "w" | "g" | "c" | "r" | "q";
+export const LEAD_FILTERS: LeadFilter[] = ["a", "h", "f", "d", "n", "t", "w", "g", "c", "r", "q"];
 
 const FILTER_WHERE: Record<LeadFilter, Prisma.LeadWhereInput> = {
   a: {},
+  h: { potential: "HIGH", status: { in: ["FOUND", "NEW", "TO_CONTACT"] } }, // как hotWhere в dashboard.ts
   f: { saved: true },
   d: { status: "FOUND" },
   n: { status: "NEW" },
   t: { status: "TO_CONTACT" },
+  w: { status: { in: ["CONTACTED", "WAITING"] } },
   g: { status: "NEGOTIATION" },
   c: { status: "CLIENT" },
   r: { status: { in: ["REJECTED", "NOT_FIT"] } },
@@ -402,8 +407,12 @@ export async function nextLeadAfter(workspaceId: string, filter: LeadFilter, cur
 // ---------- действия с лидом ----------
 
 const TASK_LINKS = {
-  tasks: { orderBy: { createdAt: "desc" }, include: { task: { select: { id: true, title: true, createdAt: true } } } },
+  tasks: {
+    orderBy: { createdAt: "desc" },
+    include: { task: { select: { id: true, title: true, createdAt: true, status: true, deadlineAt: true } } },
+  },
   contacts: { where: { kind: "EMAIL" }, orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }] },
+  outreach: { orderBy: { updatedAt: "desc" }, take: 1 },
 } satisfies Prisma.LeadInclude;
 
 export async function getLead(leadId: string, workspaceId: string) {

@@ -118,7 +118,6 @@ export type EmailDecision =
   | { accept: true; email: string; role: string; companyDomain: boolean; freeMail: boolean }
   | { accept: false; email: string; reason: string };
 
-const domainOf = (email: string) => email.split("@")[1] ?? "";
 const sameSite = (domain: string, site?: string) => !!site && (domain === site || domain.endsWith(`.${site}`));
 
 export function classifyEmail(raw: string, ctx: EmailContext): EmailDecision {

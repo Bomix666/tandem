@@ -84,6 +84,8 @@ export async function scheduleOverdueNotifications() {
       status: { not: "DONE" },
       deadlineAt: { lt: new Date() },
       notifications: { none: { type: "task_overdue" } },
+      // у follow-up по лиду своё напоминание ⏰ FOLLOW-UP с кнопками
+      leadLinks: { none: { kind: "FOLLOW_UP" } },
     },
     select: { id: true, title: true, assigneeId: true },
   });
@@ -111,8 +113,12 @@ export async function deliverDueNotifications(limit = 50) {
   });
 
   for (const n of due) {
-    const text = renderNotificationText(n.type, n.task?.title, n.payload as Record<string, unknown> | null);
     try {
+      if (n.type === "lead_followup") {
+        await deliverFollowUp(n);
+        continue;
+      }
+      const text = renderNotificationText(n.type, n.task?.title, n.payload as Record<string, unknown> | null);
       await sendTelegramMessage(n.user.telegramId, text);
       await prisma.notification.update({ where: { id: n.id }, data: { sentAt: new Date() } });
     } catch (e) {
@@ -122,6 +128,20 @@ export async function deliverDueNotifications(limit = 50) {
   }
 
   return due.length;
+}
+
+/** ⏰ FOLLOW-UP по лиду: свежие данные на момент отправки и кнопки бота. */
+async function deliverFollowUp(n: { id: string; taskId: string | null; user: { telegramId: bigint } }) {
+  // модуль лидов подгружаем лениво: он сам использует этот файл
+  const { getFollowUp } = await import("./leads/followups");
+  const { followUpNotice } = await import("./leads/followup-notice");
+  const task = n.taskId ? await prisma.task.findUnique({ where: { id: n.taskId }, select: { workspaceId: true } }) : null;
+  const fu = task && n.taskId ? await getFollowUp(n.taskId, task.workspaceId) : null;
+  if (fu && fu.task.status !== "DONE") {
+    const notice = followUpNotice(fu);
+    await sendTelegramMessage(n.user.telegramId, notice.text, { inlineKeyboard: notice.inline_keyboard });
+  }
+  await prisma.notification.update({ where: { id: n.id }, data: { sentAt: new Date() } });
 }
 
 function renderNotificationText(type: string, taskTitle?: string, payload?: Record<string, unknown> | null) {

@@ -12,7 +12,7 @@ import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "../lib/prisma";
 import { getUserWorkspace } from "../lib/telegram-auth";
 import { parseQuickAdd } from "../lib/quick-add-parser";
-import { MENU, mainMenuKeyboard } from "./menu";
+import { LEGACY_MENU, MENU, mainMenuKeyboard } from "./menu";
 import { chatState } from "./state";
 import { registerLeadsModule } from "./leads";
 
@@ -45,6 +45,11 @@ function openAppKeyboard(startParam?: string) {
   return new InlineKeyboard().webApp("Open Tandem", url);
 }
 
+// Модуль «Поиск клиентов» и Sales OS (bot/leads, lib/leads): меню, поиск,
+// лиды, Outreach, follow-up, аналитика. Регистрируется до /start — тот
+// показывает дашборд Sales OS.
+const leads = registerLeadsModule(bot, { resolveUser, openAppKeyboard, appUrl });
+
 bot.command("start", async (ctx) => {
   const payload = ctx.match?.toString().trim();
   const user = await resolveUser(ctx.from!.id, ctx.from!.first_name, ctx.from!.username);
@@ -67,6 +72,12 @@ bot.command("start", async (ctx) => {
     return;
   }
 
+  if (await getUserWorkspace(user.id)) {
+    // пространство есть: меню внизу + дашборд Sales OS (в нём и кнопка «Open Tandem»)
+    await sendMainMenu(ctx);
+    await leads.sendHome(ctx);
+    return;
+  }
   await ctx.reply(
     `Tandem — приватное рабочее пространство для двоих. Откройте приложение, чтобы начать, или используйте /task для быстрого добавления задачи.`,
     { reply_markup: openAppKeyboard() }
@@ -75,7 +86,7 @@ bot.command("start", async (ctx) => {
 });
 
 async function sendMainMenu(ctx: Context) {
-  await ctx.reply("Меню — кнопками внизу 👇", { reply_markup: mainMenuKeyboard() });
+  await ctx.reply("🚀 <b>Tandem · Sales OS</b> — разделы в меню внизу 👇", { parse_mode: "HTML", reply_markup: mainMenuKeyboard() });
 }
 
 bot.command("menu", sendMainMenu);
@@ -93,7 +104,7 @@ bot.command("task", async (ctx) => {
   await createQuickTask(ctx, text);
 });
 
-bot.hears(MENU.newTask, async (ctx) => {
+bot.hears([MENU.newTask, LEGACY_MENU.newTask], async (ctx) => {
   chatState.set(ctx.chat.id, { kind: "new_task" });
   await ctx.reply("Напиши задачу одним сообщением, например: Закончить сайт завтра 18:00");
 });
@@ -124,11 +135,8 @@ async function createQuickTask(ctx: Context, text: string) {
   );
 }
 
+// «📋 Задачи» в меню — экран Sales OS (bot/leads/sales.ts); /tasks — как раньше.
 bot.command("tasks", replyActiveTasks);
-bot.hears(MENU.tasks, async (ctx) => {
-  chatState.clear(ctx.chat.id);
-  await replyActiveTasks(ctx);
-});
 
 async function replyActiveTasks(ctx: Context) {
   const user = await resolveUser(ctx.from!.id, ctx.from!.first_name, ctx.from!.username);
@@ -167,8 +175,6 @@ function formatCountdown(deadline: Date) {
   return `Осталось ${h} ч ${m} мин`;
 }
 
-// Модуль «Поиск клиентов» (bot/leads, lib/leads): меню, мастер поиска, лиды.
-registerLeadsModule(bot, { resolveUser, openAppKeyboard });
 
 // «➕ Новая задача» из меню: следующее сообщение — текст задачи (как /task).
 bot.on("message:text", async (ctx, next) => {

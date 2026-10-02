@@ -10,6 +10,8 @@
 import type { LeadSearch, LeadStatus } from "@prisma/client";
 import { InlineKeyboard } from "grammy";
 import {
+  CHANNEL_EMOJI,
+  CHANNEL_LABELS,
   CONTACT_SOURCE_LABELS,
   EMAIL_CHECK_EMOJI,
   EMAIL_CHECK_LABELS,
@@ -20,6 +22,7 @@ import {
   POTENTIAL_EMOJI,
   POTENTIAL_LABELS,
   siteIssues,
+  outreachStatusText,
   SOURCE_LABELS,
   statusText,
 } from "../../lib/leads/labels";
@@ -29,19 +32,14 @@ import { describeRequirements, parseRequirements, type SearchRequirements } from
 import { socialLabel } from "../../lib/leads/scoring";
 import type { SearchProgress } from "../../lib/leads/search";
 import type { ScoreReason, SiteAudit, SocialLink, SourceRef } from "../../lib/leads/types";
+import { formatDayShort } from "../../lib/leads/time";
 import type { WizardDraft } from "../state";
+import { clip, crumbs, DIV, e, plural } from "./ui";
+
+export { e, plural };
 
 const DISPLAY_TZ = process.env.LEADS_TIMEZONE?.trim() || "Europe/Moscow";
 
-export const e = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-export function plural(n: number, forms: [string, string, string]): string {
-  const m10 = n % 10;
-  const m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return forms[0];
-  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return forms[1];
-  return forms[2];
-}
 const leadsWord = (n: number) => `${n} ${plural(n, ["лид", "лида", "лидов"])}`;
 
 export const formatDate = (d: Date) => d.toLocaleDateString("ru-RU", { timeZone: DISPLAY_TZ });
@@ -112,6 +110,25 @@ export function emailLines(lead: LeadWithTasks): string[] {
   });
 }
 
+const openTask = (lead: LeadWithTasks, kind: "CONTACT" | "FOLLOW_UP") => lead.tasks.find((t) => t.kind === kind && t.task.status !== "DONE");
+
+/** Строка состояния под статусом: сохранён · задача · follow-up · обращение. */
+function workLine(lead: LeadWithTasks): string | null {
+  const parts: string[] = [];
+  if (lead.saved) parts.push("❤️ сохранён");
+  if (lead.tasks.some((t) => t.kind === "CONTACT")) parts.push(openTask(lead, "CONTACT") ? "📋 задача" : "📋 задача выполнена");
+  const fu = openTask(lead, "FOLLOW_UP");
+  if (fu) parts.push(`⏰ follow-up ${formatDayShort(fu.task.deadlineAt)}`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+function outreachLine(lead: LeadWithTasks): string | null {
+  const o = lead.outreach?.[0];
+  if (!o) return null;
+  const when = o.status === "SENT" || o.status === "WAITING" || o.status === "FOLLOW_UP" ? (o.sentAt ? ` ${formatDayShort(o.sentAt)}` : "") : "";
+  return `${CHANNEL_EMOJI[o.channel]} ${CHANNEL_LABELS[o.channel]}: ${outreachStatusText(o.status)}${when}`;
+}
+
 export function renderLeadCard(lead: LeadWithTasks, opts: { number?: number } = {}): string {
   const socials = (lead.socials as unknown as SocialLink[] | null) ?? [];
   const sources = (lead.sources as unknown as SourceRef[] | null) ?? [];
@@ -120,52 +137,52 @@ export function renderLeadCard(lead: LeadWithTasks, opts: { number?: number } = 
   const nicheLine = lead.category && lead.category.toLowerCase() !== lead.niche.toLowerCase() ? `${lead.category}` : lead.niche;
 
   const lines = [
-    `${POTENTIAL_EMOJI[lead.potential]} <b>ЛИД${opts.number ? ` #${opts.number}` : ""}</b> · Lead Score: <b>${lead.score}/100</b>`,
-    "",
-    "🏢 <b>Название:</b>",
-    e(lead.name),
-    "",
+    `${POTENTIAL_EMOJI[lead.potential]} <b>LEAD${opts.number ? ` #${opts.number}` : ""}</b> · <b>${lead.score}</b>/100`,
+    DIV,
+    `🏢 <b>${e(lead.name)}</b>`,
     `📍 ${e(lead.city)}${address ? `, ${e(address)}` : ""}`,
+    `💼 ${e(nicheLine)}`,
     "",
-    "💼 <b>Ниша:</b>",
-    e(nicheLine),
-    "",
-    "🌐 <b>Сайт:</b>",
+    "🌐 <b>Сайт</b>",
     siteLine(lead),
-    "",
-    "📱 <b>Соцсети:</b>",
-    socials.length ? socials.map((s) => `<a href="${e(s.url)}">${socialLabel(s.type)}</a>`).join(" · ") : "Не найдены",
-    "",
-    "📞 <b>Телефон:</b>",
-    lead.phones.length ? lead.phones.map(e).join(", ") : "Не найден",
-    "",
-    "📧 <b>Email:</b>",
+    "📧 <b>Email</b>",
     ...emailLines(lead),
+    "📞 <b>Телефон</b>",
+    lead.phones.length ? lead.phones.map(e).join(", ") : "Не найден",
+    "📱 <b>Соцсети</b>",
+    socials.length ? socials.map((s) => `<a href="${e(s.url)}">${socialLabel(s.type)}</a>`).join(" · ") : "Не найдены",
+    DIV,
+    `🎯 <b>Lead Score</b> ${lead.score}/100 · ${POTENTIAL_LABELS[lead.potential].toLowerCase()} потенциал`,
+    ...formatScoreReasons(reasons, { withMarks: true }).slice(0, 6).map(e),
     "",
-    `${POTENTIAL_EMOJI[lead.potential]} <b>Потенциал:</b> ${POTENTIAL_LABELS[lead.potential]}`,
-    "",
-    `💡 <b>Почему ${lead.score}/100:</b>`,
-    ...formatScoreReasons(reasons, { withMarks: true }).slice(0, 9).map(e),
-    "",
-    "💻 <b>Что можно предложить:</b>",
+    "💡 <b>Возможность</b>",
     e(lead.offer ?? "—"),
-    "",
-    `🔗 <b>Источник:</b> ${sources.map((s) => `<a href="${e(s.url)}">${SOURCE_LABELS[s.provider] ?? s.provider}</a>`).join(" · ")}`,
-    `📌 Статус: ${statusText(lead.status)}${lead.saved ? " · ❤️ сохранён" : ""}${lead.tasks.length ? " · ✅ есть задача" : ""}`,
+    DIV,
+    `<b>СТАТУС</b>  ${statusText(lead.status)}`,
   ];
+  const work = workLine(lead);
+  if (work) lines.push(work);
+  const outreach = outreachLine(lead);
+  if (outreach) lines.push(outreach);
+  lines.push(`🔗 Источник: ${sources.map((s) => `<a href="${e(s.url)}">${SOURCE_LABELS[s.provider] ?? s.provider}</a>`).join(" · ")}`);
   return lines.join("\n");
 }
 
 export function leadCardKeyboard(lead: LeadWithTasks, nav: Nav): InlineKeyboard {
   const kb = new InlineKeyboard();
-  if (lead.website) kb.url("🌐 Сайт", lead.website);
-  else kb.text("🌐 Сайт", `ld:site:${lead.id}`);
-  kb.text("📱 Соцсети", `ld:soc:${lead.id}`).text("📞 Контакты", `ld:ct:${lead.id}`).row();
-  kb.text("✨ Создать предложение", `ld:pr:${lead.id}`).row();
-  kb.text(lead.tasks.length ? "✅ Задача есть" : "➕ Создать задачу", `ld:tk:${lead.id}`);
-  kb.text(lead.saved ? "💔 Убрать из сохранённых" : "❤️ Сохранить лид", `ld:sv:${lead.id}`).row();
-  kb.text(`📌 Статус: ${statusText(lead.status)}`, `ld:st:${lead.id}`).row();
-  kb.text(nav.label, nav.data);
+  const draft = lead.outreach?.[0];
+  const hasEmailDraft = draft && draft.channel === "EMAIL" && (draft.status === "DRAFT" || draft.status === "READY");
+  kb.text(hasEmailDraft ? "✉️ Открыть письмо" : "✨ Подготовить письмо", `os:pe:${lead.id}`).text("💬 Сообщение", `os:ch:${lead.id}`).row();
+  kb.text(lead.tasks.some((t) => t.kind === "CONTACT") ? "✅ Задача есть" : "➕ Создать задачу", `ld:tk:${lead.id}`);
+  kb.text(openTask(lead, "FOLLOW_UP") ? "⏰ Follow-up ✓" : "⏰ Follow-up", `os:fp:l:${lead.id}`).row();
+  kb.text(lead.saved ? "💔 Убрать" : "❤️ Сохранить", `ld:sv:${lead.id}`).text("📌 Статус", `ld:st:${lead.id}`).row();
+  const source = ((lead.sources as unknown as SourceRef[] | null) ?? [])[0];
+  const booking = lead.bookingPage as { name: string; url: string } | null;
+  const site = lead.website ?? booking?.url;
+  if (site) kb.url("🌐 Открыть сайт", site);
+  if (source) kb.url("📍 Источник", source.url);
+  if (site || source) kb.row();
+  kb.text("🏠 Меню", "os:home").text(nav.label, nav.data);
   return kb;
 }
 
@@ -175,7 +192,7 @@ export function statusPickerKeyboard(lead: { id: string; status: LeadStatus }, n
     kb.text(`${s === lead.status ? "• " : ""}${LEAD_STATUS_EMOJI[s]} ${LEAD_STATUS_LABELS[s]}`, `ld:ss:${lead.id}:${i}`);
     if (i % 2 === 1) kb.row();
   });
-  kb.text("↩️ Назад к карточке", `ld:bk:${lead.id}`).row();
+  kb.row().text("‹ Назад к карточке", `ld:bk:${lead.id}`).row();
   kb.text(nav.label, nav.data);
   return kb;
 }
@@ -324,55 +341,73 @@ export function summaryKeyboard(s: Pick<LeadSearch, "id" | "found" | "requested"
 
 export const FILTER_LABELS: Record<LeadFilter, string> = {
   a: "Все",
+  h: "🔥 Горячие",
   f: "❤️ Сохранённые",
   d: "🔎 Найденные",
   n: "🆕 Новые",
   t: "📩 Связаться",
-  g: "🤝 Переговоры",
-  c: "💰 Клиенты",
+  w: "⏳ Ждут ответа",
+  g: "💬 Переговоры",
+  c: "🤝 Клиенты",
   r: "❌ Отказы",
   q: "🔍 Поиск",
 };
+
+type ListLead = Pick<LeadWithTasks, "id" | "name" | "score" | "potential" | "status" | "saved" | "emails"> & Partial<Pick<LeadWithTasks, "tasks">>;
 
 export function myLeadsView(
   filter: LeadFilter,
   page: number,
   pageSize: number,
-  data: { items: { id: string; name: string; score: number; potential: "HIGH" | "MEDIUM" | "LOW"; status: LeadStatus; saved: boolean }[]; total: number },
+  data: { items: ListLead[]; total: number },
   query?: string
 ): { text: string; kb: InlineKeyboard } {
-  const head = `❤️ <b>МОИ ЛИДЫ</b> · ${FILTER_LABELS[filter]}${filter === "q" && query ? ` «${e(query)}»` : ""}\nВсего: ${data.total}`;
-  const rows = data.items.map(
-    (l, i) =>
-      `${page * pageSize + i + 1}. ${POTENTIAL_EMOJI[l.potential]} ${l.score} · <b>${e(l.name)}</b> — ${statusText(l.status)}${l.saved ? " ❤️" : ""}`
-  );
+  const pages = Math.max(1, Math.ceil(data.total / pageSize));
+  const head = [
+    crumbs("Лиды"),
+    `👥 <b>ЛИДЫ</b> · ${FILTER_LABELS[filter]}${filter === "q" && query ? ` «${e(query)}»` : ""}`,
+    `Всего: <b>${data.total}</b>${pages > 1 ? ` · стр. ${page + 1}/${pages}` : ""}`,
+  ].join("\n");
+  const rows = data.items.map((l, i) => {
+    const fu = l.tasks?.find((t) => t.kind === "FOLLOW_UP" && t.task.status !== "DONE");
+    const marks = [l.saved ? "❤️" : null, l.emails.length ? "📧" : null, fu ? `⏰ ${formatDayShort(fu.task.deadlineAt)}` : null].filter(Boolean).join(" ");
+    return `${page * pageSize + i + 1}. ${POTENTIAL_EMOJI[l.potential]} <b>${l.score}</b> · <b>${e(l.name)}</b>\n     ${statusText(l.status)}${marks ? ` · ${marks}` : ""}`;
+  });
   const empty =
     data.total === 0
       ? filter === "a"
-        ? "\n\nПока пусто. Найди клиентов кнопкой «🔎 Найти клиентов»."
-        : "\n\nВ этом фильтре пока пусто."
+        ? "Пока пусто. Найди клиентов кнопкой «🔎 Найти клиентов»."
+        : "В этом фильтре пока пусто."
       : "";
   const kb = new InlineKeyboard();
-  data.items.forEach((l, i) => kb.text(`${page * pageSize + i + 1}. ${l.name}`.slice(0, 60), `ld:ol:${filter}:${l.id}`).row());
-  const pages = Math.ceil(data.total / pageSize);
+  data.items.forEach((l, i) => {
+    kb.text(clip(`${page * pageSize + i + 1} · ${l.name}`, 30), `ld:ol:${filter}:${l.id}`);
+    if (i % 2 === 1) kb.row();
+  });
+  kb.row();
   if (pages > 1) {
-    if (page > 0) kb.text("◀️", `ld:ml:${filter}:${page - 1}`);
+    kb.text(page > 0 ? "‹" : "·", page > 0 ? `ld:ml:${filter}:${page - 1}` : `ld:ml:${filter}:${page}`);
     kb.text(`${page + 1}/${pages}`, `ld:ml:${filter}:${page}`);
-    if (page < pages - 1) kb.text("▶️", `ld:ml:${filter}:${page + 1}`);
+    kb.text(page < pages - 1 ? "›" : "·", page < pages - 1 ? `ld:ml:${filter}:${page + 1}` : `ld:ml:${filter}:${page}`);
     kb.row();
   }
   const f = (code: LeadFilter, label: string) => kb.text(`${filter === code ? "• " : ""}${label}`, code === "q" ? "ld:mq" : `ld:ml:${code}:0`);
   f("a", "Все");
+  f("h", "🔥");
   f("f", "❤️");
   f("d", "🔎");
   f("n", "🆕");
-  f("t", "📩");
   kb.row();
-  f("g", "🤝");
-  f("c", "💰");
+  f("t", "📩");
+  f("w", "⏳");
+  f("g", "💬");
+  f("c", "🤝");
   f("r", "❌");
+  kb.row();
   f("q", "🔍 Поиск");
-  return { text: `${head}${rows.length ? `\n\n${rows.join("\n")}` : ""}${empty}`, kb };
+  kb.text("🕘 История", "ld:h:0").row();
+  kb.text("🏠 Меню", "os:home").text("🔎 Найти клиентов", "os:find");
+  return { text: `${head}\n${DIV}\n${rows.length ? rows.join("\n") : empty}`, kb };
 }
 
 // ---------------- история, статистика, настройки ----------------
@@ -383,8 +418,10 @@ export function historyView(
   data: { items: Pick<LeadSearch, "id" | "niche" | "city" | "found" | "status" | "createdAt" | "parentId">[]; total: number }
 ): { text: string; kb: InlineKeyboard } {
   const kb = new InlineKeyboard();
+  const head = `${crumbs("Лиды", "История")}\n🕘 <b>ИСТОРИЯ ПОИСКА</b>`;
   if (data.total === 0) {
-    return { text: "🕘 <b>ИСТОРИЯ ПОИСКА</b>\n\nПоисков пока не было. Начни с «🔎 Найти клиентов».", kb };
+    kb.text("🔎 Найти клиентов", "os:find").text("🏠 Меню", "os:home");
+    return { text: `${head}\n\nПоисков пока не было. Начни с «🔎 Найти клиентов».`, kb };
   }
   const mark = (s: { status: string }) => (s.status === "FAILED" ? "⚠️ " : s.status === "RUNNING" ? "⏳ " : "");
   const rows = data.items.map(
@@ -399,39 +436,10 @@ export function historyView(
     if (page > 0) kb.text("◀️", `ld:h:${page - 1}`);
     kb.text(`${page + 1}/${pages}`, `ld:h:${page}`);
     if (page < pages - 1) kb.text("▶️", `ld:h:${page + 1}`);
+    kb.row();
   }
-  return { text: `🕘 <b>ИСТОРИЯ ПОИСКА</b>\n\n${rows.join("\n\n")}`, kb };
-}
-
-export function statsText(s: { total: number; byStatus: Partial<Record<LeadStatus, number>>; saved: number; searches: number; avgCheck: number }): string {
-  const n = (st: LeadStatus) => s.byStatus[st] ?? 0;
-  const clients = n("CLIENT");
-  const pct = s.total ? ` (${((clients / s.total) * 100).toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%)` : "";
-  return [
-    "📊 <b>ЛИДЫ</b>",
-    "",
-    `Всего: ${s.total}`,
-    `❤️ Сохранённые: ${s.saved}`,
-    "",
-    ...LEAD_STATUS_ORDER.map((st) => `${LEAD_STATUS_EMOJI[st]} ${LEAD_STATUS_LABELS[st]}: ${n(st)}`),
-    "",
-    "Конверсия в клиента:",
-    `${clients} / ${s.total}${pct}`,
-    "",
-    "💰 <b>Потенциальные продажи</b>",
-    "",
-    `Клиентов: ${clients}`,
-    "",
-    "Если средний чек:",
-    formatMoney(s.avgCheck),
-    "",
-    "Потенциальный оборот:",
-    formatMoney(clients * s.avgCheck),
-    "",
-    "<i>Это расчёт по введённому среднему чеку, а не гарантированный доход.</i>",
-    "",
-    `🔎 Поисков выполнено: ${s.searches}`,
-  ].join("\n");
+  kb.text("👥 Лиды", "ld:ml:a:0").text("🏠 Меню", "os:home");
+  return { text: `${head}\n${DIV}\n${rows.join("\n\n")}`, kb };
 }
 
 export interface SenderSettings {
@@ -446,6 +454,7 @@ export function settingsText(
 ): string {
   const v = (x: string | null) => (x ? e(x) : "<i>не указано</i>");
   return [
+    crumbs("Настройки"),
     "⚙️ <b>НАСТРОЙКИ ПОИСКА КЛИЕНТОВ</b>",
     "",
     `Средний чек: <b>${formatMoney(s.avgCheck)}</b>`,
@@ -471,5 +480,7 @@ export function settingsKeyboard(): InlineKeyboard {
     .text("✏️ Компания", "ld:set:company")
     .row()
     .text("✏️ Портфолио", "ld:set:portfolio")
-    .text("✏️ Контакт", "ld:set:contact");
+    .text("✏️ Контакт", "ld:set:contact")
+    .row()
+    .text("🏠 Меню", "os:home");
 }

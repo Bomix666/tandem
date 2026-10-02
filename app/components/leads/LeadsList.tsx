@@ -11,8 +11,9 @@ const FILTERS: { key: LeadFilterDTO; label: string; count: (s: LeadsStatsDTO) =>
   { key: "d", label: "🔎 Найденные", count: (s) => s.byStatus.FOUND ?? 0 },
   { key: "n", label: "🆕 Новые", count: (s) => s.byStatus.NEW ?? 0 },
   { key: "t", label: "📩 Связаться", count: (s) => s.byStatus.TO_CONTACT ?? 0 },
-  { key: "g", label: "🤝 Переговоры", count: (s) => s.byStatus.NEGOTIATION ?? 0 },
-  { key: "c", label: "💰 Клиенты", count: (s) => s.byStatus.CLIENT ?? 0 },
+  { key: "w", label: "⏳ Ждут ответа", count: (s) => (s.byStatus.CONTACTED ?? 0) + (s.byStatus.WAITING ?? 0) },
+  { key: "g", label: "💬 Переговоры", count: (s) => s.byStatus.NEGOTIATION ?? 0 },
+  { key: "c", label: "🤝 Клиенты", count: (s) => s.byStatus.CLIENT ?? 0 },
   { key: "r", label: "❌ Отказы", count: (s) => (s.byStatus.REJECTED ?? 0) + (s.byStatus.NOT_FIT ?? 0) },
 ];
 

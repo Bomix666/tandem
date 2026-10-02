@@ -14,7 +14,10 @@ export type ChatState =
   | { kind: "lead_wizard"; step: "niche" | "city" | "count" | "extra" | "confirm"; draft: WizardDraft; messageId?: number }
   | { kind: "lead_name_query" }
   | { kind: "lead_avg_check" }
-  | { kind: "lead_sender"; field: SenderField };
+  | { kind: "lead_sender"; field: SenderField }
+  // Sales OS: свой текст обращения / своя дата follow-up
+  | { kind: "outreach_edit"; outreachId: string; editorMessageId?: number; promptMessageId?: number }
+  | { kind: "followup_date"; scope: "l" | "o"; id: string; promptMessageId?: number };
 
 /** Поля подписи в «⚙️ Настройки» модуля лидов. */
 export type SenderField = "name" | "company" | "portfolio" | "contact";

@@ -2,9 +2,9 @@
 // Задача создаётся в той же таблице Task и тем же путём, что и в Mini App:
 // запись в ленту активности, напоминания о дедлайне, уведомление партнёру.
 
-import type { Lead, LeadContact, Priority } from "@prisma/client";
+import type { Lead, LeadContact, LeadTaskKind, Prisma, Priority } from "@prisma/client";
 import { logActivity } from "../activity";
-import { notifyEvent, scheduleDeadlineReminders } from "../notifications";
+import { cancelPendingReminders, notifyEvent, scheduleDeadlineReminders } from "../notifications";
 import { prisma } from "../prisma";
 import { changeLeadStatus, recordLeadEvent } from "./events";
 import { EMAIL_CHECK_EMOJI, formatScoreReasons, LEAD_STATUS_LABELS, POTENTIAL_LABELS } from "./labels";
@@ -61,11 +61,14 @@ export async function createTaskFromLead(params: {
   const { leadId, workspace, user, force } = params;
   const lead = await prisma.lead.findFirst({
     where: { id: leadId, workspaceId: workspace.id },
-    include: { tasks: { orderBy: { createdAt: "desc" }, take: 1, include: { task: true } }, contacts: { where: { kind: "EMAIL" } } },
+    include: {
+      tasks: { where: { kind: "CONTACT" }, orderBy: { createdAt: "desc" }, take: 1, include: { task: true } },
+      contacts: { where: { kind: "EMAIL" } },
+    },
   });
   if (!lead) return { status: "not_found" };
 
-  // Повторную задачу — только по явному подтверждению пользователя.
+  // Повторную задачу «связаться» — только по явному подтверждению (follow-up не считается).
   const existing = lead.tasks[0]?.task;
   if (existing && !force) return { status: "exists", task: existing };
 
@@ -105,4 +108,30 @@ export async function createTaskFromLead(params: {
   }
 
   return { status: "created", task };
+}
+
+/**
+ * Закрывает открытые задачи лида нужного вида: «Связаться» — когда обращение
+ * отправлено, «Follow-up» — когда пришёл ответ, отказ или клиент.
+ */
+export async function completeLeadTasks(
+  leadId: string,
+  workspaceId: string,
+  kind: LeadTaskKind,
+  actorId: string,
+  meta?: Prisma.InputJsonObject
+): Promise<number> {
+  const links = await prisma.leadTask.findMany({
+    where: { leadId, kind, task: { workspaceId, status: { not: "DONE" } } },
+    include: { task: true },
+  });
+  for (const link of links) {
+    await prisma.task.update({ where: { id: link.taskId }, data: { status: "DONE", progress: 100, completedAt: new Date() } });
+    await cancelPendingReminders(link.taskId);
+    await logActivity(workspaceId, actorId, "task_completed", { taskId: link.taskId, title: link.task.title });
+    if (kind === "FOLLOW_UP") {
+      await recordLeadEvent({ workspaceId, leadId, type: "FOLLOWUP_DONE", actorId, meta: { taskId: link.taskId, ...(meta ?? {}) } });
+    }
+  }
+  return links.length;
 }

@@ -47,6 +47,8 @@ async function main() {
   const searches = await import("../app/api/leads/searches/route");
   const search = await import("../app/api/leads/searches/[id]/route");
   const meta = await import("../app/api/leads/meta/route");
+  const mail = await import("../app/go/mail/[id]/route");
+  const { outreachMailUrl } = await import("../lib/leads/outreach/links");
 
   async function call(handler: Handler, method: string, path: string, user: number, body?: unknown, params: Record<string, string> = {}): Promise<Res> {
     const req = new Request(`http://localhost${path}`, {
@@ -134,6 +136,8 @@ async function main() {
     check("предложение сохранено в лиде", (await prisma.lead.findUnique({ where: { id: insta.id } }))?.proposal === pr.json.text);
     check("предложение: тема письма; адресата нет — email не найден", !!pr.json.subject && pr.json.recipient === null, pr.json);
     check("черновик обращения (Outreach DRAFT)", (await prisma.outreach.count({ where: { leadId: insta.id, status: "DRAFT", channel: "EMAIL" } })) === 1);
+    const pr2 = await call(proposal.POST as Handler, "POST", `/api/leads/${insta.id}/proposal`, 1, undefined, { id: insta.id });
+    check("повторное «✨ предложение» не плодит черновики", pr2.json.text === pr.json.text && (await prisma.outreach.count({ where: { leadId: insta.id } })) === 1);
 
     // ===== задача из лида =====
     const t1 = await call(task.POST as Handler, "POST", `/api/leads/${insta.id}/task`, 1, {}, { id: insta.id });
@@ -222,6 +226,23 @@ async function main() {
     check("задача из найденного лида → статус «Связаться»", lt.status === 201 && lvAfter.json.lead.status === "TO_CONTACT", lvAfter.json.lead.status);
     m = await call(meta.GET as Handler, "GET", "/api/leads/meta", 1);
     check("meta: состояние локальной копии OSM", m.json.osmStatus.startsWith("локальная копия от"), m.json.osmStatus);
+
+    // «📨 Открыть почту» из бота: страница приложения с mailto, только по подписанной ссылке
+    const lvDraft = await call(proposal.POST as Handler, "POST", `/api/leads/${lv.id}/proposal`, 2, undefined, { id: lv.id });
+    const lvOutreach = await prisma.outreach.findFirstOrThrow({ where: { leadId: lv.id, channel: "EMAIL" } });
+    process.env.APP_URL = "https://app.example";
+    const link = outreachMailUrl(lvOutreach.id)!;
+    const page = await mail.GET(new Request(link), { params: { id: lvOutreach.id } });
+    const html = await page.text();
+    check(
+      "/go/mail: письмо, кнопка mailto с адресом и темой, отметка «Готово к отправке»",
+      page.status === 200 && html.includes(`href="mailto:info@lavka-barber.ru?subject=`) && html.includes("Бот ничего не отправляет сам") && (await prisma.outreach.findUniqueOrThrow({ where: { id: lvOutreach.id } })).status === "READY",
+      `${page.status} ${lvDraft.json.recipient}`
+    );
+    const forged = await mail.GET(new Request(`https://app.example/go/mail/${lvOutreach.id}?t=000000000000000000000000`), { params: { id: lvOutreach.id } });
+    check("/go/mail: без верной подписи — 404", forged.status === 404);
+    list = await call(leads.GET as Handler, "GET", "/api/leads?filter=w", 1);
+    check("фильтр «⏳ Ждут ответа» принимается API", list.status === 200);
     list = await call(leads.GET as Handler, "GET", "/api/leads?filter=d", 1);
     check("фильтр «🔎 Найденные»", list.status === 200 && list.json.leads.every((l: { status: string }) => l.status === "FOUND"), list.json.total);
 

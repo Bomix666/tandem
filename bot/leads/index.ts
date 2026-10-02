@@ -1,16 +1,17 @@
-// Модуль «Поиск клиентов» в Telegram-боте. Подключается одной строкой из
-// bot/index.ts (registerLeadsModule) и не меняет существующие команды.
+// Модуль «Поиск клиентов» и Sales OS в Telegram-боте. Подключается одной
+// строкой из bot/index.ts (registerLeadsModule) и не меняет существующие команды.
 //
 // Сценарий: 🔎 Найти клиентов → ниша → город → количество → дополнительно →
-// фоновый поиск → карточки лидов → предложение / задача / статус / сохранение.
+// фоновый поиск → карточки лидов → письмо / сообщение → задача → follow-up →
+// клиент. Дашборд, Outreach, follow-up и аналитика — bot/leads/sales.ts.
 
 import type { LeadStatus, User } from "@prisma/client";
 import { InlineKeyboard, type Bot, type Context } from "grammy";
 import { isYandexConfigured, leadsConfig } from "../../lib/leads/config";
 import type { LeadSource } from "../../lib/leads/jobs";
 import { createTaskFromLead } from "../../lib/leads/lead-tasks";
-import { EMAIL_CHECK_EMOJI, LEAD_STATUS_ORDER, POTENTIAL_LABELS, statusText } from "../../lib/leads/labels";
-import { createOutreachDraft, getOutreachGenerator } from "../../lib/leads/outreach";
+import { LEAD_STATUS_ORDER, POTENTIAL_LABELS, statusText } from "../../lib/leads/labels";
+import { getOutreachGenerator } from "../../lib/leads/outreach";
 import { osmLocalStatus } from "../../lib/leads/providers/osm-local";
 import { redactError } from "../../lib/leads/redact";
 import { CITY_PRESETS, NICHE_PRESETS } from "../../lib/leads/niches";
@@ -18,7 +19,6 @@ import {
   failInterruptedSearches,
   getLead,
   getLeadSettings,
-  getLeadStats,
   getSearch,
   getSearchLeadAt,
   LEAD_FILTERS,
@@ -36,7 +36,7 @@ import {
 import { socialLabel } from "../../lib/leads/scoring";
 import type { SocialLink } from "../../lib/leads/types";
 import { getUserWorkspace } from "../../lib/telegram-auth";
-import { MENU } from "../menu";
+import { LEGACY_MENU, MENU } from "../menu";
 import { chatState, type ChatState, type SenderField } from "../state";
 import {
   e,
@@ -54,7 +54,6 @@ import {
   renderLeadCard,
   settingsKeyboard,
   settingsText,
-  statsText,
   statusPickerKeyboard,
   summaryKeyboard,
   summaryText,
@@ -62,19 +61,17 @@ import {
   wizardView,
   type Nav,
 } from "./format";
+import { ignoreNotModified, show, type Ctx, type ShowMode } from "./context";
 import { launchSearch, searchNav } from "./runner";
+import { registerSalesOs } from "./sales";
 
 export interface LeadsModuleDeps {
   resolveUser: (telegramId: number, firstName: string, username?: string) => Promise<User>;
   openAppKeyboard: () => InlineKeyboard;
+  /** Адрес Mini App — для кнопок «📱 Open Tandem» на экранах Sales OS. */
+  appUrl?: string;
 }
 
-type Workspace = NonNullable<Awaited<ReturnType<typeof getUserWorkspace>>>;
-interface Ctx {
-  user: User;
-  workspace: Workspace;
-  chatId: number;
-}
 type WizardState = Extract<ChatState, { kind: "lead_wizard" }>;
 
 const PAGE_SIZE = 8;
@@ -86,11 +83,9 @@ const SENDER_PROMPTS: Record<SenderField, string> = {
 };
 const lastQueries = new Map<number, string>(); // «🔍 Поиск» в «Мои лиды» — последний запрос чата
 
-const ignoreNotModified = (err: Error) => {
-  if (!/message is not modified/i.test(err.message)) throw err;
-};
-const listNav = (f: LeadFilter, leadId: string): Nav => ({ label: "➡️ Следующий", data: `ld:nx:m:${f}:${leadId}` });
+const listNav = (f: LeadFilter, leadId: string): Nav => ({ label: "Следующий ›", data: `ld:nx:m:${f}:${leadId}` });
 const isFilter = (f: string | undefined): f is LeadFilter => !!f && (LEAD_FILTERS as string[]).includes(f);
+const MENU_LABELS = new Set<string>([...Object.values(MENU), ...Object.values(LEGACY_MENU)]);
 
 export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
   failInterruptedSearches()
@@ -117,12 +112,10 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
       st.step === "confirm"
         ? wizardConfirmView(st.draft, { yandex: isYandexConfigured(), osm: leadsConfig.osmEnabled })
         : wizardView(st.step, st.draft);
-    const opts = { parse_mode: "HTML" as const, reply_markup: view.kb, link_preview_options: NO_PREVIEW };
-    if (mode === "edit") await ctx.editMessageText(view.text, opts).catch(ignoreNotModified);
-    else await ctx.reply(view.text, opts);
+    await show(ctx, view, mode);
   }
 
-  async function startWizard(ctx: Context, c: Ctx, mode: "edit" | "send" = "send") {
+  async function startWizard(ctx: Context, c: Ctx, mode: ShowMode = "send") {
     const st: WizardState = { kind: "lead_wizard", step: "niche", draft: {} };
     chatState.set(c.chatId, st);
     await renderWizard(ctx, st, mode);
@@ -242,11 +235,16 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
 
   // ---------------- карточки ----------------
 
-  async function sendOrEditCard(ctx: Context, lead: LeadWithTasks, nav: Nav, mode: "edit" | "send") {
-    const text = renderLeadCard(lead, { number: numberFromNav(nav) });
-    const opts = { parse_mode: "HTML" as const, reply_markup: leadCardKeyboard(lead, nav), link_preview_options: NO_PREVIEW };
-    if (mode === "edit") await ctx.editMessageText(text, opts).catch(ignoreNotModified);
-    else await ctx.reply(text, opts);
+  async function sendOrEditCard(ctx: Context, lead: LeadWithTasks, nav: Nav, mode: ShowMode) {
+    await show(ctx, { text: renderLeadCard(lead, { number: numberFromNav(nav) }), kb: leadCardKeyboard(lead, nav) }, mode);
+  }
+
+  /** Открыть карточку лида (из списка, дашборда, follow-up): одно сообщение, навигация по фильтру. */
+  async function openLead(ctx: Context, c: Ctx, leadId: string, mode: ShowMode, filter: LeadFilter = "a") {
+    const lead = await getLead(leadId, c.workspace.id);
+    if (!lead) return "Лид не найден";
+    await sendOrEditCard(ctx, lead, listNav(filter, lead.id), mode);
+    return;
   }
 
   /** Кнопка навигации текущей карточки — чтобы после действий «Следующий» вёл туда же. */
@@ -313,25 +311,6 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
     return;
   }
 
-  async function makeProposal(ctx: Context, c: Ctx, lead: LeadWithTasks) {
-    const draft = await createOutreachDraft({ lead, channel: "EMAIL", actorId: c.user.id });
-    const contact = lead.contacts.find((x) => x.value === draft.recipient);
-    const to = draft.recipient
-      ? `Кому: ${contact?.verification ? `${EMAIL_CHECK_EMOJI[contact.verification]} ` : ""}${e(draft.recipient)}`
-      : "Кому: email не найден — отправь через телефон или соцсети";
-    const head = [
-      `✨ <b>Предложение для «${e(lead.name)}»</b>`,
-      to,
-      draft.text.subject ? `Тема: ${e(draft.text.subject)}` : null,
-      `Сделано: ${e(draft.engine)}.${draft.note ? ` ${e(draft.note)}` : ""}`,
-      ...draft.text.warnings.map((w) => `⚠️ ${e(w)}`),
-      "Проверь текст перед отправкой — бот ничего не отправляет сам.",
-    ].filter((l): l is string => l !== null);
-    await ctx.reply(head.join("\n"), { parse_mode: "HTML" });
-    const contacted = LEAD_STATUS_ORDER.indexOf("CONTACTED");
-    await ctx.reply(draft.text.body, { reply_markup: new InlineKeyboard().text("💬 Отметить: Написали", `ld:sq:${lead.id}:${contacted}`) });
-  }
-
   async function makeTask(ctx: Context, c: Ctx, leadId: string, force: boolean): Promise<string | undefined> {
     const result = await createTaskFromLead({ leadId, workspace: c.workspace, user: c.user, force });
     if (result.status === "not_found") return "Лид не найден";
@@ -357,36 +336,20 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
     let query = filter === "q" ? lastQueries.get(c.chatId) : undefined;
     if (filter === "q" && !query) filter = "a";
     const data = await listLeads(c.workspace.id, filter, page, query, PAGE_SIZE);
-    const view = myLeadsView(filter, page, PAGE_SIZE, data, query);
-    const opts = { parse_mode: "HTML" as const, reply_markup: view.kb };
-    if (mode === "edit") await ctx.editMessageText(view.text, opts).catch(ignoreNotModified);
-    else await ctx.reply(view.text, opts);
+    await show(ctx, myLeadsView(filter, page, PAGE_SIZE, data, query), mode);
   }
 
   async function showHistory(ctx: Context, c: Ctx, page: number, mode: "edit" | "send") {
     const data = await listSearches(c.workspace.id, page, PAGE_SIZE);
-    const view = historyView(page, PAGE_SIZE, data);
-    const opts = { parse_mode: "HTML" as const, reply_markup: view.kb };
-    if (mode === "edit") await ctx.editMessageText(view.text, opts).catch(ignoreNotModified);
-    else await ctx.reply(view.text, opts);
+    await show(ctx, historyView(page, PAGE_SIZE, data), mode);
   }
 
-  async function showStats(ctx: Context, c: Ctx) {
-    const stats = await getLeadStats(c.workspace.id);
-    await ctx.reply(statsText(stats), {
-      parse_mode: "HTML",
-      reply_markup: new InlineKeyboard().text("✏️ Изменить средний чек", "ld:set:avg"),
-    });
-  }
-
-  async function showSettings(ctx: Context, c: Ctx) {
+  async function showSettings(ctx: Context, c: Ctx, mode: ShowMode = "send") {
     const settings = await getLeadSettings(c.workspace.id);
     const { generator } = getOutreachGenerator();
     const osmLocal = await osmLocalStatus().catch(() => "состояние неизвестно");
-    await ctx.reply(
-      settingsText({ ...settings, yandex: isYandexConfigured(), osm: leadsConfig.osmEnabled, osmLocal, proposalLabel: generator.label }),
-      { parse_mode: "HTML", reply_markup: settingsKeyboard(), link_preview_options: NO_PREVIEW }
-    );
+    const text = settingsText({ ...settings, yandex: isYandexConfigured(), osm: leadsConfig.osmEnabled, osmLocal, proposalLabel: generator.label });
+    await show(ctx, { text, kb: settingsKeyboard() }, mode);
   }
 
   /** «Найти ещё» (продолжение с пропуском найденного) или «Повторить» (тот же поиск заново). */
@@ -434,13 +397,9 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
         }
         return;
       }
-      case "ol": {
+      case "ol":
         if (!isFilter(a1)) return;
-        const lead = await getLead(a2, c.workspace.id);
-        if (!lead) return "Лид не найден";
-        await sendOrEditCard(ctx, lead, listNav(a1, lead.id), "send");
-        return;
-      }
+        return openLead(ctx, c, a2, "edit", a1);
 
       case "site": {
         const lead = await getLead(a1, c.workspace.id);
@@ -466,12 +425,8 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
         await sendContacts(ctx, lead);
         return;
       }
-      case "pr": {
-        const lead = await getLead(a1, c.workspace.id);
-        if (!lead) return "Лид не найден";
-        await makeProposal(ctx, c, lead);
-        return "Готово";
-      }
+      case "pr": // «✨ Создать предложение» из старых карточек → редактор письма Sales OS
+        return sales.prepare(ctx, c, a1, "EMAIL");
       case "tk":
       case "tkf":
         return makeTask(ctx, c, a1, action === "tkf");
@@ -479,7 +434,7 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
         const saved = await toggleLeadSaved(a1, c.workspace.id, c.user.id);
         if (saved === null) return "Лид не найден";
         await rerenderCard(ctx, c, a1);
-        return saved ? "❤️ Лид сохранён" : "Убран из сохранённых";
+        return saved ? "❤️ Лид сохранён · в работе" : "Убран из сохранённых";
       }
       case "st":
         await rerenderCard(ctx, c, a1, "picker");
@@ -532,6 +487,11 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
     }
   }
 
+  // ---------------- Sales OS: дашборд, Outreach, follow-up, аналитика ----------------
+  // (до текстового обработчика ниже — кнопки меню внизу важнее ожидаемого ввода)
+
+  const sales = registerSalesOs(bot, { resolveCtx, openLead, showMyLeads, startWizard, showSettings, appUrl: deps.appUrl });
+
   // ---------------- регистрация ----------------
 
   const withCtx = (fn: (ctx: Context, c: Ctx) => Promise<unknown>) => async (ctx: Context) => {
@@ -546,20 +506,13 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
   });
   bot.hears(MENU.findClients, openWizard);
   bot.command("find", openWizard);
-  bot.hears(MENU.myLeads, openLeads);
+  bot.hears([MENU.myLeads, LEGACY_MENU.myLeads], openLeads);
   bot.command("leads", openLeads);
   bot.hears(
-    MENU.history,
+    LEGACY_MENU.history,
     withCtx((ctx, c) => {
       chatState.clear(c.chatId);
       return showHistory(ctx, c, 0, "send");
-    })
-  );
-  bot.hears(
-    MENU.stats,
-    withCtx((ctx, c) => {
-      chatState.clear(c.chatId);
-      return showStats(ctx, c);
     })
   );
   bot.hears(
@@ -587,11 +540,17 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
   bot.on("message:text", async (ctx, next) => {
     const st = chatState.get(ctx.chat.id);
     if (!st || st.kind === "new_task") return next();
+    // кнопка меню внизу — это переход в раздел, а не ввод для ожидающего шага
+    if (MENU_LABELS.has(ctx.message.text.trim())) {
+      chatState.clear(ctx.chat.id);
+      return next();
+    }
     const c = await resolveCtx(ctx);
     if (!c) return;
     const text = ctx.message.text.trim();
 
     if (st.kind === "lead_wizard") return wizardText(ctx, c, st, text);
+    if (await sales.handleText(ctx, c, st, text)) return;
     if (st.kind === "lead_name_query") {
       if (text.length < 2) {
         await ctx.reply("Нужно хотя бы 2 символа.");
@@ -620,7 +579,22 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
       }
       chatState.clear(c.chatId);
       await setAvgCheck(c.workspace.id, value);
-      await ctx.reply(`✅ Средний чек: ${formatMoney(value)}. Он используется только для расчёта в «📊 Статистика».`);
+      await ctx.reply(`✅ Средний чек: ${formatMoney(value)}. Он используется только для расчёта в «📊 Аналитика».`);
+      return;
     }
+    return next();
   });
+
+  /** Главный экран Sales OS — для /start. null — пространство ещё не настроено. */
+  async function sendHome(ctx: Context): Promise<boolean> {
+    const from = ctx.from;
+    if (!from) return false;
+    const user = await deps.resolveUser(from.id, from.first_name, from.username);
+    const workspace = await getUserWorkspace(user.id);
+    if (!workspace) return false;
+    await sales.home(ctx, { user, workspace, chatId: ctx.chat?.id ?? from.id }, "send");
+    return true;
+  }
+
+  return { sendHome };
 }
