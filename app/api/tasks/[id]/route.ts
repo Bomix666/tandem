@@ -94,9 +94,26 @@ export async function DELETE(request: Request, { params }: { params: { id: strin
   try {
     const user = await requireAuthedUser(request);
     const { workspace, task } = await loadOwnedTask(user.id, params.id);
-    await prisma.task.delete({ where: { id: task.id } });
+
+    // Комментарии, вложения, лента, напоминания и связь с лидом удаляются каскадом.
+    // Остальное, что ссылается на задачу без внешнего ключа, чистим руками.
+    const link = await prisma.leadTask.findUnique({ where: { taskId: task.id } });
+    const [stoppedWorking] = await prisma.$transaction([
+      // «работаю над этой задачей» не должно зависнуть на удалённой
+      prisma.presence.updateMany({ where: { workingTaskId: task.id, status: "WORKING" }, data: { status: "ONLINE", workingTaskId: null } }),
+      prisma.presence.updateMany({ where: { workingTaskId: task.id }, data: { workingTaskId: null } }),
+      // удалили follow-up — у обращения не остаётся «напомнить такого-то числа»
+      prisma.outreach.updateMany({
+        where: { id: link?.kind === "FOLLOW_UP" && link.outreachId ? link.outreachId : "-", followUpAt: { not: null } },
+        data: { followUpAt: null },
+      }),
+      prisma.task.delete({ where: { id: task.id } }),
+    ]);
     await logActivity(workspace.id, user.id, "task_deleted", { title: task.title });
     publish({ type: "tasks_changed", workspaceId: workspace.id });
+    publish({ type: "activity_changed", workspaceId: workspace.id });
+    if (stoppedWorking.count) publish({ type: "presence_changed", workspaceId: workspace.id });
+    if (link) publish({ type: "leads_changed", workspaceId: workspace.id });
     return NextResponse.json({ ok: true });
   } catch (err) {
     return errorResponse(err);

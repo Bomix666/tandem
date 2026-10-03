@@ -31,6 +31,7 @@ interface WorkspaceState {
   completeTask: (taskId: string) => Promise<void>;
   reopenTask: (taskId: string) => Promise<void>;
   addComment: (taskId: string, text: string) => Promise<void>;
+  deleteTask: (taskId: string) => Promise<boolean>;
   startWorking: (taskId: string) => Promise<void>;
   stopWorking: () => Promise<void>;
   refreshAll: () => Promise<void>;
@@ -179,6 +180,25 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     await refreshAll();
   };
 
+  const deleteTask: WorkspaceState["deleteTask"] = async (taskId) => {
+    const prevTasks = tasks;
+    const prevDone = doneTasks;
+    setTasks((prev) => prev.filter((t) => t.id !== taskId)); // optimistic
+    setDoneTasks((prev) => prev.filter((t) => t.id !== taskId));
+    try {
+      await api.deleteTask(taskId);
+      showToast("Задача удалена");
+      await refreshAll();
+      return true;
+    } catch {
+      setTasks(prevTasks);
+      setDoneTasks(prevDone);
+      await refreshAll().catch(() => void 0);
+      showToast("Не удалось удалить задачу");
+      return false;
+    }
+  };
+
   const addComment: WorkspaceState["addComment"] = async (taskId, text) => {
     await api.addComment(taskId, text);
     await refreshAll();
@@ -214,6 +234,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         completeTask,
         reopenTask,
         addComment,
+        deleteTask,
         startWorking,
         stopWorking,
         refreshAll,

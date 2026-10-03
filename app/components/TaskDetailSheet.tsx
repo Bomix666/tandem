@@ -13,7 +13,7 @@ const PRIORITY_LABEL: Record<string, string> = { LOW: "Низкий", MEDIUM: "�
 const STATUS_LABEL: Record<string, string> = { TODO: "К выполнению", IN_PROGRESS: "В процессе", DONE: "Готово" };
 
 export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; onClose: () => void }) {
-  const { user, tasks, doneTasks, presences, updateProgress, completeTask, reopenTask, addComment, startWorking, stopWorking, showToast } =
+  const { user, tasks, doneTasks, presences, updateProgress, completeTask, reopenTask, addComment, deleteTask, startWorking, stopWorking } =
     useWorkspace();
   const task = [...tasks, ...doneTasks].find((t) => t.id === taskId) ?? null;
 
@@ -21,10 +21,16 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   const [comments, setComments] = useState<CommentDTO[]>([]);
   const [commentText, setCommentText] = useState("");
   const [commentsLoading, setCommentsLoading] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     setLocalProgress(task?.progress ?? 0);
   }, [task?.id, task?.progress]);
+
+  useEffect(() => {
+    setConfirmDelete(false);
+  }, [taskId]);
 
   useEffect(() => {
     if (!taskId) return;
@@ -58,6 +64,18 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
     hapticSuccess();
     await completeTask(task!.id);
     onClose();
+  }
+
+  async function handleDelete() {
+    setDeleting(true);
+    haptic("medium");
+    const ok = await deleteTask(task!.id);
+    setDeleting(false);
+    if (ok) {
+      hapticSuccess();
+      setConfirmDelete(false);
+      onClose();
+    }
   }
 
   async function handleSendComment() {
@@ -153,6 +171,31 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
           <button className="primary-btn" onClick={handleComplete}>
             {task.progress >= 100 ? "Вернуть в работу" : "Отметить выполненным"}
           </button>
+
+          {confirmDelete ? (
+            <div className="danger-box">
+              <div className="danger-title">Удалить задачу?</div>
+              <div className="danger-text">«{task.title}» пропадёт у вас обоих вместе с комментариями и вложениями. Это нельзя отменить.</div>
+              <div className="btn-row">
+                <button className="danger-btn solid" onClick={handleDelete} disabled={deleting}>
+                  {deleting ? "Удаляю…" : "Да, удалить"}
+                </button>
+                <button className="secondary-btn" onClick={() => setConfirmDelete(false)} disabled={deleting}>
+                  Отмена
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              className="danger-btn"
+              onClick={() => {
+                haptic("light");
+                setConfirmDelete(true);
+              }}
+            >
+              🗑 Удалить задачу
+            </button>
+          )}
 
           <div className="section-head" style={{ margin: "22px 0 6px" }}>
             <div className="title" style={{ fontSize: 14 }}>Комментарии</div>

@@ -507,3 +507,12 @@
   .wordmark{ display:flex; align-items:center; gap:9px; }
   .wordmark .name{ font:500 24px var(--font); letter-spacing:-.02em; }
   .wordmark .dot{ width:8px; height:8px; border-radius:50%; background:var(--lime); box-shadow:0 0 12px 2px rgba(198,245,62,.7); }
+
+  /* удаление задачи */
+  .danger-btn{ width:100%; padding:13px; border-radius:100px; border:1px solid rgba(255,106,82,.35); background:transparent; color:#FF8F7D; font:500 13px var(--font); margin-top:10px; cursor:pointer; }
+  .danger-btn:active{ background:var(--rust-dim); }
+  .danger-btn.solid{ border-color:transparent; background:linear-gradient(180deg,#FF8A74,#F0553D); color:#fff; font-weight:600; margin-top:0; }
+  .danger-btn:disabled{ opacity:.55; }
+  .danger-box{ margin-top:12px; padding:14px; border-radius:var(--radius-m); background:var(--rust-dim); border:1px solid rgba(255,106,82,.3); }
+  .danger-title{ font:600 14px var(--font); color:#FF8F7D; }
+  .danger-text{ font-size:12.5px; line-height:1.5; color:var(--ink-dim); margin-top:5px; }

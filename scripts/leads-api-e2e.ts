@@ -305,6 +305,53 @@ async function main() {
     list = await call(leads.GET as Handler, "GET", "/api/leads?filter=d", 1);
     check("фильтр «🔎 Найденные»", list.status === 200 && list.json.leads.every((l: { status: string }) => l.status === "FOUND"), list.json.total);
 
+    // ===== удаление задач =====
+    const taskRoute = await import("../app/api/tasks/[id]/route");
+    const me = await prisma.user.findFirstOrThrow({ where: { telegramId: BigInt(1) } });
+    const instaDraft = await prisma.outreach.findFirstOrThrow({ where: { leadId: insta.id, channel: "EMAIL" } });
+    await call(outreachOne.PATCH as Handler, "PATCH", `/api/leads/outreach/${instaDraft.id}`, 1, { action: "sent" }, { oid: instaDraft.id });
+    const fuDel = await call(leadFollowUp.POST as Handler, "POST", `/api/leads/${insta.id}/followup`, 1, { days: 3, outreachId: instaDraft.id }, { id: insta.id });
+    const fuTaskId = fuDel.json.followUp.taskId;
+    await prisma.presence.upsert({
+      where: { userId: me.id },
+      update: { status: "WORKING", workingTaskId: fuTaskId },
+      create: { userId: me.id, status: "WORKING", workingTaskId: fuTaskId },
+    });
+    check(
+      "перед удалением: у обращения стоит follow-up, есть напоминание",
+      !!(await prisma.outreach.findUniqueOrThrow({ where: { id: instaDraft.id } })).followUpAt && (await prisma.notification.count({ where: { taskId: fuTaskId } })) === 1
+    );
+    const delFu = await call(taskRoute.DELETE as Handler, "DELETE", `/api/tasks/${fuTaskId}`, 2, undefined, { id: fuTaskId });
+    check("партнёр удаляет задачу follow-up → 200", delFu.status === 200 && !(await prisma.task.findUnique({ where: { id: fuTaskId } })));
+    check(
+      "удаление follow-up: связь с лидом и напоминание ушли, у обращения нет даты, лид остался",
+      !(await prisma.leadTask.count({ where: { taskId: fuTaskId } })) &&
+        !(await prisma.notification.count({ where: { taskId: fuTaskId } })) &&
+        (await prisma.outreach.findUniqueOrThrow({ where: { id: instaDraft.id } })).followUpAt === null &&
+        !!(await prisma.lead.findUnique({ where: { id: insta.id } }))
+    );
+    const pres = await prisma.presence.findUniqueOrThrow({ where: { userId: me.id } });
+    check("«работаю над задачей» сброшено, статус не завис", pres.workingTaskId === null && pres.status === "ONLINE", pres);
+    check(
+      "в ленте запись об удалении с названием",
+      (await prisma.taskActivity.count({ where: { type: "task_deleted", workspaceId: ws.id } })) >= 1 &&
+        JSON.stringify((await prisma.taskActivity.findFirstOrThrow({ where: { type: "task_deleted", workspaceId: ws.id }, orderBy: { createdAt: "desc" } })).meta).includes("Follow-up")
+    );
+
+    const tasksBefore = (await call(lead.GET as Handler, "GET", `/api/leads/${insta.id}`, 1, undefined, { id: insta.id })).json.lead.tasks.length;
+    const delContact = await call(taskRoute.DELETE as Handler, "DELETE", `/api/tasks/${t1.json.task.id}`, 1, undefined, { id: t1.json.task.id });
+    const tasksAfter = (await call(lead.GET as Handler, "GET", `/api/leads/${insta.id}`, 1, undefined, { id: insta.id })).json.lead.tasks.length;
+    check("удаление задачи «Связаться»: лид остаётся, в карточке на одну задачу меньше", delContact.status === 200 && tasksAfter === tasksBefore - 1, `${tasksBefore} → ${tasksAfter}`);
+    const deletedTwice = await call(taskRoute.DELETE as Handler, "DELETE", `/api/tasks/${t1.json.task.id}`, 1, undefined, { id: t1.json.task.id });
+    check("повторное удаление → 404", deletedTwice.status === 404);
+
+    const otherWs = await prisma.workspace.create({ data: {} });
+    const foreignTask = await prisma.task.create({
+      data: { workspaceId: otherWs.id, creatorId: me.id, assigneeId: me.id, title: "Чужая задача", deadlineAt: new Date(Date.now() + 86_400_000) },
+    });
+    const delForeign = await call(taskRoute.DELETE as Handler, "DELETE", `/api/tasks/${foreignTask.id}`, 1, undefined, { id: foreignTask.id });
+    check("задачу из чужого пространства удалить нельзя → 404, задача на месте", delForeign.status === 404 && !!(await prisma.task.findUnique({ where: { id: foreignTask.id } })));
+
     const other = await prisma.workspace.create({ data: {} });
     const foreign = await prisma.lead.create({ data: { workspaceId: other.id, name: "Чужой", normName: "чужой", city: "Москва", niche: "x", sources: [] } });
     const f = await call(lead.GET as Handler, "GET", `/api/leads/${foreign.id}`, 1, undefined, { id: foreign.id });
