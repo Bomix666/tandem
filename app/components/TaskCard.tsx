@@ -10,7 +10,16 @@ export function TaskCard({ task, currentUserId, onOpen }: { task: TaskDTO; curre
         <div>
           <div className="task-title">{task.title}</div>
           <div className="task-meta">
-            <span className={`pdot ${task.priority.toLowerCase()}`} />
+            {task.priority === "URGENT" || task.priority === "HIGH" ? (
+              <span className={`prio-pill ${task.priority.toLowerCase()}`}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5 21V4M5 4h11l-2 4 2 4H5" />
+                </svg>
+                {task.priority === "URGENT" ? "Срочно" : "Высокий"}
+              </span>
+            ) : (
+              <span className={`pdot ${task.priority.toLowerCase()}`} />
+            )}
             <span className={`chip ${isYou ? "you" : "alex"}`}>{isYou ? "Вы" : task.assignee.firstName}</span>
           </div>
         </div>

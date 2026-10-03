@@ -1,10 +1,13 @@
 "use client";
 
+// Нижнее меню оболочки: плавающая «пилюля» с четырьмя разделами и поднятой
+// центральной кнопкой действия (новая задача; на «Клиентах» — поиск клиентов).
+
 import { haptic } from "@/lib/telegram-client";
 
-export type ViewName = "home" | "tasks" | "leads" | "done" | "activity";
+export type ViewName = "home" | "tasks" | "leads" | "activity";
 
-export function BottomNav({ view, onChange }: { view: ViewName; onChange: (v: ViewName) => void }) {
+export function BottomNav({ view, onChange, onCenter }: { view: ViewName; onChange: (v: ViewName) => void; onCenter: () => void }) {
   return (
     <nav className="bottom">
       <div className="nav-pill">
@@ -13,19 +16,27 @@ export function BottomNav({ view, onChange }: { view: ViewName; onChange: (v: Vi
           <path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />
         </NavButton>
         <NavButton active={view === "tasks"} label="Задачи" onClick={() => onChange("tasks")}>
-          <rect x="4" y="4" width="16" height="16" rx="4" />
-          <path d="M8 12h8M8 16h5" />
+          <rect x="5" y="4.5" width="14" height="16" rx="3" />
+          <path d="M9 3.5h6v3H9zM9 12l2 2 4-4" />
         </NavButton>
+        <button
+          className="nav-center"
+          aria-label={view === "leads" ? "Найти клиентов" : "Новая задача"}
+          onClick={() => {
+            haptic("medium");
+            onCenter();
+          }}
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M11 3.5c.3 3.9 1.6 5.2 5.5 5.5-3.9.3-5.2 1.6-5.5 5.5-.3-3.9-1.6-5.2-5.5-5.5 3.9-.3 5.2-1.6 5.5-5.5Z" />
+            <path d="M17.5 13c.2 2.4 1 3.2 3.5 3.5-2.5.3-3.3 1.1-3.5 3.5-.3-2.4-1.1-3.2-3.5-3.5 2.4-.3 3.2-1.1 3.5-3.5Z" />
+          </svg>
+        </button>
         <NavButton active={view === "leads"} label="Клиенты" onClick={() => onChange("leads")}>
           <circle cx="11" cy="11" r="6.5" />
           <path d="m20 20-4.2-4.2" />
-          <path d="M8.5 11h5M11 8.5v5" />
         </NavButton>
-        <NavButton active={view === "done"} label="Готово" onClick={() => onChange("done")}>
-          <circle cx="12" cy="12" r="8.5" />
-          <path d="M8.5 12.5l2.3 2.3 4.7-5" />
-        </NavButton>
-        <NavButton active={view === "activity"} label="Активность" onClick={() => onChange("activity")}>
+        <NavButton active={view === "activity"} label="Лента" onClick={() => onChange("activity")}>
           <path d="M3 12h4l2 7 4-14 2 7h6" />
         </NavButton>
       </div>
@@ -42,27 +53,10 @@ function NavButton({ active, label, onClick, children }: { active: boolean; labe
         onClick();
       }}
     >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
         {children}
       </svg>
       <span>{label}</span>
-    </button>
-  );
-}
-
-export function Fab({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      className="fab"
-      onClick={() => {
-        haptic("medium");
-        onClick();
-      }}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-        <line x1="12" y1="5" x2="12" y2="19" />
-        <line x1="5" y1="12" x2="19" y2="12" />
-      </svg>
     </button>
   );
 }

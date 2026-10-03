@@ -211,10 +211,10 @@ export function LeadDetailSheet({ ids, index, refreshKey, onNavigate, onClose, o
                 💬 Сообщение
               </button>
               <button className="secondary-btn" onClick={() => makeTask(false)} disabled={busy === "task"}>
-                {busy === "task" ? "Создаю…" : contactTasks.length ? "✅ Задача есть" : "➕ Создать задачу"}
+                {busy === "task" ? "Создаю…" : contactTasks.length ? "✅ Задача" : "➕ Задача"}
               </button>
               <button className="secondary-btn" onClick={() => setPanel(panel === "followup" ? null : "followup")}>
-                {shown.followUp ? "⏰ Follow-up ✓" : "⏰ Follow-up"}
+                {shown.followUp ? "⏰ Перенести" : "⏰ Follow-up"}
               </button>
             </div>
 

@@ -113,7 +113,7 @@ export function AnalyticsSection({ meta, onMeta, reloadKey }: Props) {
           <div className="kv">
             <div className="k">💰 Потенциальный оборот</div>
             <div className="v">
-              <b style={{ fontFamily: "Fraunces, serif", fontSize: 22, fontWeight: 460 }}>{formatMoney(a.clients * a.avgCheck)}</b>
+              <b style={{ fontSize: 22, fontWeight: 600, letterSpacing: "-0.02em" }}>{formatMoney(a.clients * a.avgCheck)}</b>
               <div style={{ color: "var(--ink-faint)", fontSize: 11.5, marginTop: 4 }}>
                 {a.clients} × {formatMoney(a.avgCheck)}. Это расчёт по введённому среднему чеку, а не гарантированный доход.
               </div>
