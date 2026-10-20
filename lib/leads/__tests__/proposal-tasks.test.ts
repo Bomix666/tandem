@@ -41,16 +41,19 @@ describe("шаблон предложения", () => {
   });
 
   it("по умолчанию используется шаблон, его можно заменить движком по env", async () => {
-    const { generator, note } = getProposalGenerator();
-    expect(generator.id).toBe("template");
-    expect(note).toBeNull();
-    process.env.LEADS_PROPOSAL_ENGINE = "claude";
+    const saved = process.env.LEADS_PROPOSAL_ENGINE; // vitest подтягивает .env разработчика
+    delete process.env.LEADS_PROPOSAL_ENGINE;
     try {
+      const { generator, note } = getProposalGenerator();
+      expect(generator.id).toBe("template");
+      expect(note).toBeNull();
+      process.env.LEADS_PROPOSAL_ENGINE = "claude";
       const fallback = getProposalGenerator();
-      expect(fallback.generator.id).toBe("template"); // Claude ещё не подключён — честный откат на шаблон
+      expect(fallback.generator.id).toBe("template"); // у предложений своего Claude нет — честный откат на шаблон
       expect(fallback.note).toContain("не подключён");
     } finally {
-      delete process.env.LEADS_PROPOSAL_ENGINE;
+      if (saved === undefined) delete process.env.LEADS_PROPOSAL_ENGINE;
+      else process.env.LEADS_PROPOSAL_ENGINE = saved;
     }
   });
 });

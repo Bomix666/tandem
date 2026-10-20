@@ -45,7 +45,7 @@ export const leadsConfig = {
   get nominatimUrl(): string {
     return (process.env.NOMINATIM_URL?.trim() || "https://nominatim.openstreetmap.org").replace(/\/$/, "");
   },
-  /** Движок текстов предложений: пока только "template" (см. lib/leads/proposal). */
+  /** Движок текстов: "claude" (нужен ANTHROPIC_API_KEY) или "template" — см. lib/leads/outreach. */
   get proposalEngine(): string {
     return process.env.LEADS_PROPOSAL_ENGINE?.trim() || "template";
   },

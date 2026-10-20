@@ -182,6 +182,29 @@ export function mergeSocials(...lists: SocialLink[][]): SocialLink[] {
   return [...byType.values()];
 }
 
+export interface Messenger {
+  type: "whatsapp" | "telegram";
+  url: string;
+  /** Ссылка собрана из мобильного номера — есть ли там чат, никто не проверял. */
+  byPhone: boolean;
+}
+
+/**
+ * WhatsApp и Telegram лида: ссылка с сайта/карт, а если её нет — по первому
+ * мобильному номеру (+7 9xx). По номеру чат откроется, только если номер там
+ * зарегистрирован (в Telegram ещё и разрешён поиск по номеру).
+ */
+export function leadMessengers(phones: string[], socials: SocialLink[]): Messenger[] {
+  const mobile = phones.map(normalizePhone).find((p) => p && /^79\d{9}$/.test(p));
+  const out: Messenger[] = [];
+  for (const type of ["whatsapp", "telegram"] as const) {
+    const found = socials.find((s) => s.type === type);
+    if (found) out.push({ type, url: found.url, byPhone: false });
+    else if (mobile) out.push({ type, url: type === "whatsapp" ? `https://wa.me/${mobile}` : `https://t.me/+${mobile}`, byPhone: true });
+  }
+  return out;
+}
+
 export function uniq<T>(items: T[]): T[] {
   return [...new Set(items)];
 }

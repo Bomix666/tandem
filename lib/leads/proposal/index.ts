@@ -1,12 +1,5 @@
-// Выбор генератора предложений по LEADS_PROPOSAL_ENGINE.
-//
-// Как подключить Claude позже, не трогая остальной модуль:
-//   1. создать lib/leads/proposal/claude.ts, экспортирующий объект
-//      ProposalGenerator (id: "claude"), который превращает LeadFacts в промпт
-//      и возвращает текст ответа; ключ брать из process.env.ANTHROPIC_API_KEY;
-//   2. добавить его в GENERATORS ниже;
-//   3. в .env: LEADS_PROPOSAL_ENGINE=claude и ANTHROPIC_API_KEY=...
-// Бот, кнопка «✨ Создать предложение» и сохранение текста не меняются.
+// Выбор генератора предложений по LEADS_PROPOSAL_ENGINE. Здесь только шаблон:
+// тексты через Claude пишет модуль обращений (lib/leads/outreach/claude.ts).
 
 import { leadsConfig } from "../config";
 import { templateGenerator } from "./template";

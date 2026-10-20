@@ -76,6 +76,46 @@ export function analyzeHtml(html: string, finalUrl: string, now = new Date()): H
     contactPages: findContactPages(html, finalUrl),
     socials: extractSocials(html),
     phones: extractPhones(html),
+    content: extractSiteContent(html),
+  };
+}
+
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", laquo: "«", raquo: "»", mdash: "—", ndash: "–" };
+
+function plainText(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, ent: string) => {
+      if (ent[0] !== "#") return ENTITIES[ent.toLowerCase()] ?? m;
+      const code = ent[1] === "x" || ent[1] === "X" ? parseInt(ent.slice(2), 16) : Number(ent.slice(1));
+      return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : m;
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Что бизнес сам пишет о себе на главной: заголовок, описание, подзаголовки и
+ * начало текста. По этому пишется письмо под конкретный бизнес, а не шаблон.
+ */
+export function extractSiteContent(html: string): NonNullable<SiteAudit["content"]> {
+  let description: string | undefined;
+  for (const m of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const tag = m[0];
+    if (!/(?:name|property)\s*=\s*["']?(?:og:)?description["'\s>]/i.test(tag)) continue;
+    const content = /content\s*=\s*(["'])([\s\S]*?)\1/i.exec(tag)?.[2];
+    if (content && plainText(content)) {
+      description = plainText(content).slice(0, 300);
+      break;
+    }
+  }
+  const body = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<noscript[\s\S]*?<\/noscript>|<!--[\s\S]*?-->/gi, " ");
+  const headings = uniq([...body.matchAll(/<h[1-3]\b[^>]*>([\s\S]*?)<\/h[1-3]>/gi)].map((m) => plainText(m[1]!).slice(0, 120)).filter(Boolean)).slice(0, 8);
+  return {
+    title: plainText(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "").slice(0, 160) || undefined,
+    description,
+    headings,
+    text: plainText(body.replace(/<(nav|header|footer)\b[\s\S]*?<\/\1>/gi, " ")).slice(0, 1500),
   };
 }
 

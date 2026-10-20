@@ -3,10 +3,10 @@
 // Ничего не отправляется автоматически: бот и Mini App только готовят текст и
 // ссылку, а «📨 Отправлено» отмечает сам пользователь.
 //
-// Как подключить Claude позже: добавить OutreachGenerator с id "claude" в
-// GENERATORS и выставить LEADS_PROPOSAL_ENGINE=claude — бот, Mini App и
-// хранение черновиков не меняются. Почтовый сервис — OutreachSender с
-// mode "auto" (см. senders.ts) и отдельным подтверждением отправки.
+// Тексты пишет Claude (claude.ts), если LEADS_PROPOSAL_ENGINE=claude и задан
+// ANTHROPIC_API_KEY или CLAUDE_CODE_OAUTH_TOKEN (подписка), иначе — шаблон по
+// фактам. Почтовый сервис — OutreachSender с mode "auto" (см. senders.ts) и
+// отдельным подтверждением отправки.
 
 import type { Lead, LeadContact, LeadStatus, Outreach, OutreachChannel, OutreachStatus } from "@prisma/client";
 import { prisma } from "../../prisma";
@@ -14,21 +14,33 @@ import { leadsConfig } from "../config";
 import { changeLeadStatus, recordLeadEvent } from "../events";
 import { completeLeadTasks } from "../lead-tasks";
 import { buildLeadFacts } from "../proposal";
+import { leadMessengers } from "../normalize";
 import { getLeadSettings } from "../repository";
+import { auditWebsite } from "../site-audit";
 import type { SocialLink } from "../types";
+import { claudeOutreachGenerator } from "./claude";
 import { manualSenders } from "./senders";
 import { templateOutreachGenerator } from "./template";
 import type { OutreachGenerator, OutreachText } from "./types";
 
 const GENERATORS: Record<string, OutreachGenerator> = {
   template: templateOutreachGenerator,
+  claude: claudeOutreachGenerator,
 };
 
 export function getOutreachGenerator(): { generator: OutreachGenerator; note: string | null } {
   const id = leadsConfig.proposalEngine;
+  if (id === "claude" && !process.env.ANTHROPIC_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+    return { generator: templateOutreachGenerator, note: "Claude не подключён: в .env нет ни ANTHROPIC_API_KEY, ни CLAUDE_CODE_OAUTH_TOKEN — использую шаблон." };
+  }
   const generator = GENERATORS[id];
   if (generator) return { generator, note: null };
   return { generator: templateOutreachGenerator, note: `Движок «${id}» не подключён — использую шаблон.` };
+}
+
+/** Чем сделан сохранённый текст (Outreach.generator) — для «Сделано: …». */
+export function generatorLabel(id: string): string {
+  return GENERATORS[id]?.label ?? getOutreachGenerator().generator.label;
 }
 
 type LeadForOutreach = Lead & { contacts?: LeadContact[] };
@@ -49,9 +61,9 @@ export function pickRecipient(lead: LeadForOutreach, channel: OutreachChannel): 
       return { recipient: lead.emails[0] ?? null, contactId: null };
     }
     case "TELEGRAM":
-      return { recipient: socials.find((s) => s.type === "telegram")?.url ?? null, contactId: null };
+      return { recipient: leadMessengers(lead.phones, socials).find((m) => m.type === "telegram")?.url ?? null, contactId: null };
     case "WHATSAPP":
-      return { recipient: socials.find((s) => s.type === "whatsapp")?.url ?? lead.phones[0] ?? null, contactId: null };
+      return { recipient: leadMessengers(lead.phones, socials).find((m) => m.type === "whatsapp")?.url ?? lead.phones[0] ?? null, contactId: null };
     case "SOCIAL":
       return { recipient: socials.find((s) => s.type === "vk" || s.type === "instagram")?.url ?? socials[0]?.url ?? null, contactId: null };
   }
@@ -104,14 +116,22 @@ export async function prepareOutreach(params: {
 
   const settings = await getLeadSettings(lead.workspaceId);
   const variant = existing ? existing.variant + 1 : 0;
+  const facts = buildLeadFacts(lead);
+  // лиды, проверенные до появления content, — читаем главную сейчас (не сохраняем)
+  if (generator.id === "claude" && facts.websiteKind === "own" && !facts.siteContent && lead.website) {
+    const audit = await auditWebsite(lead.website);
+    if (audit.status === "ok") facts.siteContent = audit.content;
+  }
   const text = await generator.generate({
     channel,
     variant,
-    facts: buildLeadFacts(lead),
+    facts,
+    previous: existing?.body,
     sender: { name: settings.senderName, company: settings.companyName, portfolioUrl: settings.portfolioUrl, contact: settings.senderContact },
   });
+  const usedId = text.fallback ? templateOutreachGenerator.id : generator.id;
   const { recipient, contactId } = pickRecipient(lead, channel);
-  const data = { recipient, contactId, subject: text.subject ?? null, body: text.body, generator: generator.id, variant, status: "DRAFT" as const };
+  const data = { recipient, contactId, subject: text.subject ?? null, body: text.body, generator: usedId, variant, status: "DRAFT" as const };
 
   const outreach = existing
     ? await prisma.outreach.update({ where: { id: existing.id }, data })
@@ -123,11 +143,17 @@ export async function prepareOutreach(params: {
     leadId: lead.id,
     type: "OUTREACH_DRAFTED",
     actorId: params.actorId,
-    meta: { outreachId: outreach.id, channel, generator: generator.id, variant },
+    meta: { outreachId: outreach.id, channel, generator: usedId, variant },
   });
   // совместимость: «✨ предложение» в Mini App читается из Lead.proposal
   if (channel === "EMAIL") await prisma.lead.update({ where: { id: lead.id }, data: { proposal: text.body } });
-  return { outreach, text: { ...text, warnings: await outreachWarnings(outreach) }, engine: generator.label, note, reused: false };
+  return {
+    outreach,
+    text: { ...text, warnings: await outreachWarnings(outreach) },
+    engine: text.fallback ? templateOutreachGenerator.label : generator.label,
+    note: text.fallback ?? note,
+    reused: false,
+  };
 }
 
 /** Старое имя (Mini App «✨ Создать предложение»): открыть или создать черновик письма. */

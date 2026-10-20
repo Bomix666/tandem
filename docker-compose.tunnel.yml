@@ -15,7 +15,9 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    command: tunnel --no-autoupdate --url http://app:3000
+    # http2 (TCP 443) вместо quic: под VPN UDP 7844 часто режется, и туннель
+    # отдаёт 530.
+    command: tunnel --no-autoupdate --protocol http2 --url http://app:3000
     # Встроенный DNS Docker (127.0.0.11) на части машин (VPN, нестандартный
     # резолвер хоста) не отвечает на SRV-запросы argotunnel.com — cloudflared
     # падает в цикле и каждый раз выдаёт новый адрес. Явные DNS это лечат.

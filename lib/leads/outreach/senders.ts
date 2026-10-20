@@ -6,8 +6,10 @@
 import type { OutreachChannel } from "@prisma/client";
 import type { ManualHandoff, OutreachSender } from "./types";
 
-// Длинные mailto-ссылки почтовые клиенты обрезают — тогда текст копируется вручную.
-const MAILTO_LIMIT = 1800;
+// ponytail: 8000 — с запасом под лимит длины ссылки у почтовых программ и серверов Outlook.
+// Кириллица в ссылке занимает ~6 символов на букву, поэтому прежние 1800 не вмещали даже короткое
+// письмо. Длиннее — ссылка без текста; страница письма копирует его в буфер при нажатии.
+const LINK_LIMIT = 8000;
 
 function mailto(recipient: string | null, subject: string | null | undefined, body: string): string | null {
   if (!recipient) return null;
@@ -15,8 +17,26 @@ function mailto(recipient: string | null, subject: string | null | undefined, bo
   if (subject) params.set("subject", subject);
   params.set("body", body);
   const url = `mailto:${encodeURIComponent(recipient).replace(/%40/g, "@")}?${params.toString().replace(/\+/g, "%20")}`;
-  if (url.length <= MAILTO_LIMIT) return url;
+  if (url.length <= LINK_LIMIT) return url;
   return subject ? `mailto:${recipient}?subject=${encodeURIComponent(subject)}` : `mailto:${recipient}`;
+}
+
+// Outlook в браузере mailto: не перехватывает — у него своя ссылка на новое письмо:
+// личная почта (@outlook.com, @hotmail.com) и рабочая Microsoft 365 — на разных адресах.
+const OUTLOOK_COMPOSE = {
+  personal: "https://outlook.live.com/mail/0/deeplink/compose",
+  work: "https://outlook.office.com/mail/deeplink/compose",
+};
+
+export function outlookComposeUrl(kind: keyof typeof OUTLOOK_COMPOSE, recipient: string | null, subject: string | null | undefined, body: string): string | null {
+  if (!recipient) return null;
+  const params = new URLSearchParams({ to: recipient });
+  if (subject) params.set("subject", subject);
+  const link = () => `${OUTLOOK_COMPOSE[kind]}?${params.toString().replace(/\+/g, "%20")}`;
+  const short = link();
+  params.set("body", body);
+  const full = link();
+  return full.length <= LINK_LIMIT ? full : short;
 }
 
 export const manualSenders: Record<OutreachChannel, OutreachSender> = {

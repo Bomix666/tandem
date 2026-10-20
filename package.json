@@ -18,6 +18,7 @@
     "dev:fake-sources": "tsx scripts/dev-fake-sources.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
     "@aws-sdk/client-s3": "^3.658.1",
     "@aws-sdk/s3-request-presigner": "^3.658.1",
     "@prisma/client": "^5.20.0",

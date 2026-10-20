@@ -21,7 +21,10 @@ export function buildLeadFacts(lead: Lead): LeadFacts {
     nicheLabel: niche.singular,
     nicheAccusative: niche.accusative,
     category: lead.category ?? undefined,
+    address: lead.address ?? undefined,
+    hours: lead.hours ?? undefined,
     websiteKind,
+    website: lead.website ?? undefined,
     domain: lead.domain ?? undefined,
     bookingName: booking?.name,
     socialTypes: socials.map((s) => s.type),
@@ -36,8 +39,10 @@ export function buildLeadFacts(lead: Lead): LeadFacts {
             hasCta: audit.hasCta,
             copyrightYear: audit.copyrightYear,
             outdated: audit.outdated,
+            platform: audit.platform,
           }
         : undefined,
+    siteContent: websiteKind === "own" && audit?.status === "ok" ? audit.content : undefined,
     offer: buildOfferPlan({ websiteKind, audit }, niche),
     reasons: formatScoreReasons((lead.scoreReasons as unknown as ScoreReason[] | null) ?? [], { positiveOnly: true }),
   };

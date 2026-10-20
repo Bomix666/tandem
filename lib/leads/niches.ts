@@ -181,15 +181,20 @@ export function resolveNiche(input: string): NicheSpec {
   return preset ?? customNiche(input);
 }
 
+// Слова о форме бизнеса, а не о нише: «магазин» есть и у цветочного, и у зоомагазина.
+const GENERIC_WORDS = ["магазин", "салон", "студи", "центр", "сервис", "компани", "услуг", "мастерск", "агентств", "ремонт"];
+
 export function customNiche(input: string): NicheSpec {
   const label = input.trim().replace(/\s+/g, " ");
-  // Основы слов: «автомойки» → «автомо», чтобы ловить разные окончания.
-  const keywords = label
+  const words = label
     .toLowerCase()
     .replace(/ё/g, "е")
     .split(/[^\p{L}\p{N}]+/u)
-    .filter((w) => w.length >= 4)
-    .map((w) => w.slice(0, Math.max(4, w.length - 2)));
+    .filter((w) => w.length >= 4);
+  // «Магазин игрушек» ищем по «игрушек»; если общие все слова («Салоны») — по ним, иначе искать нечем.
+  const specific = words.filter((w) => !GENERIC_WORDS.some((g) => w.startsWith(g)));
+  // Основы слов: «автомойки» → «автомо», чтобы ловить разные окончания.
+  const keywords = (specific.length ? specific : words).map((w) => w.slice(0, Math.max(4, w.length - 2)));
   return {
     key: "custom",
     label: label.charAt(0).toUpperCase() + label.slice(1),

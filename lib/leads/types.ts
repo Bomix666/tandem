@@ -67,6 +67,8 @@ export interface SiteAudit {
   contactPages?: string[];
   socials: SocialLink[];
   phones: string[];
+  /** Что написано на главной (заголовок, описание, подзаголовки, начало текста) — для писем. */
+  content?: { title?: string; description?: string; headings: string[]; text: string };
 }
 
 /** Лид-кандидат после объединения источников — то, что скорим и сохраняем. */

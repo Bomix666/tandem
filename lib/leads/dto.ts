@@ -15,10 +15,11 @@ import type {
 } from "../../types/leads";
 import type { Dashboard } from "./dashboard";
 import { followUpScope, type FollowUp } from "./followups";
-import { EDITABLE, type OutreachWithLead } from "./outreach";
+import { EDITABLE, generatorLabel, type OutreachWithLead } from "./outreach";
 import { outreachMailUrl } from "./outreach/links";
 import { manualSenders } from "./outreach/senders";
 import { CONTACT_SOURCE_LABELS, EMAIL_CHECK_LABELS, SOURCE_LABELS, siteIssues } from "./labels";
+import { leadMessengers } from "./normalize";
 import { isModernSite, socialLabel } from "./scoring";
 import { leadToDraft } from "./repository";
 import type { ScoreReason, SiteAudit, SocialLink, SourceRef, WebsiteKind } from "./types";
@@ -84,7 +85,8 @@ export function toLeadDTO(lead: LeadWithTaskLinks): LeadDTO {
     phones: lead.phones,
     emails: lead.emails,
     contacts: (lead.contacts ?? []).filter((c) => c.kind === "EMAIL").map(contactDTO),
-    socials: socials.map((s) => ({ type: s.type, label: socialLabel(s.type), url: s.url })),
+    socials: socials.filter((s) => s.type !== "whatsapp" && s.type !== "telegram").map((s) => ({ type: s.type, label: socialLabel(s.type), url: s.url })),
+    messengers: leadMessengers(lead.phones, socials).map((m) => ({ ...m, label: socialLabel(m.type) })),
     hours: lead.hours,
     sources: sources.map((s) => ({ provider: s.provider, label: SOURCE_LABELS[s.provider] ?? s.provider, url: s.url })),
     score: lead.score,
@@ -142,7 +144,7 @@ export function toOutreachDTO(o: OutreachWithLead, extra: { warnings: string[]; 
     createdAt: o.createdAt.toISOString(),
     editable,
     warnings: editable ? extra.warnings : [],
-    engine: extra.engine,
+    engine: o.generator === "manual" ? extra.engine : generatorLabel(o.generator),
     openUrl,
     openLabel,
   };

@@ -371,7 +371,7 @@ async function main() {
     check("редактор: черновик, «Кому», тема, кнопки ТЗ", proposal.text.includes("📝 Черновик") && proposal.text.includes("Кому: <i>email не найден</i>") && proposal.text.includes("Тема: <b>") && ["✏️ Редактировать", "📋 Копировать", "🔄 Другой вариант", "✅ Я отправил", "❌ Отмена", "‹ К лиду"].every((t) => buttons(card1.message_id).some((b) => b.text === t)), buttons(card1.message_id).map((b) => b.text).join(" | "));
     check("нет email — нет кнопки «Открыть почту»", !buttons(card1.message_id).some((b) => b.text.includes("Открыть почту")));
     check("предложение сохранено в лиде", !!(await prisma.lead.findUnique({ where: { id: card2Lead.id } }))?.proposal);
-    check("пометка «шаблон, AI не подключён»", proposal.text.includes("AI не подключён"));
+    check("пометка «Сделано: шаблон по фактам»", proposal.text.includes("Сделано: шаблон по фактам"));
     const draft1 = await prisma.outreach.findFirst({ where: { leadId: card2Lead.id } });
     check("предложение = черновик обращения (Outreach DRAFT), ничего не отправлено", draft1?.status === "DRAFT" && draft1.channel === "EMAIL" && !draft1.sentAt, JSON.stringify(draft1));
     check("история: OUTREACH_DRAFTED", (await prisma.leadEvent.count({ where: { leadId: card2Lead.id, type: "OUTREACH_DRAFTED" } })) === 1);

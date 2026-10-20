@@ -185,5 +185,19 @@ bot.on("message:text", async (ctx, next) => {
 
 bot.catch((err) => console.error("Bot error:", err));
 
+// Кнопка меню слева от поля ввода — на текущий адрес из .env: адрес туннеля
+// меняется после перезапуска, и так его не нужно менять в BotFather.
+// Кнопку по умолчанию Telegram иногда не обновляет (отвечает ok, отдаёт старую),
+// поэтому ставим её ещё и в чат каждого пользователя — это применяется сразу.
+if (appUrl) {
+  const menu_button = { type: "web_app" as const, text: "Tandem", web_app: { url: appUrl } };
+  void (async () => {
+    await bot.api.setChatMenuButton({ menu_button });
+    for (const u of await prisma.user.findMany({ select: { telegramId: true } })) {
+      await bot.api.setChatMenuButton({ chat_id: Number(u.telegramId), menu_button }).catch(() => void 0); // чат мог быть удалён
+    }
+  })().catch((err) => console.error("Menu button:", (err as Error).message));
+}
+
 bot.start();
 console.log("Tandem bot running (long polling).");

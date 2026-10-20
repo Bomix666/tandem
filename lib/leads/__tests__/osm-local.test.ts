@@ -72,4 +72,9 @@ describe("поиск по локальной копии", () => {
     expect(kindsForWords(["автомой"])).toContain("amenity=car_wash");
     expect(sql.where).toContain('"kinds" && $2::text[]');
   });
+
+  it("своя ниша: «магазин» в названии ниши не тянет все цветочные и зоомагазины", () => {
+    const sql = nicheToSql(resolveNiche("Магазин игрушек"), 1)!;
+    expect(sql.params).toEqual([["%игруш%"]]); // без видов OSM: «Цветочный магазин» / «Зоомагазин» не подходят
+  });
 });

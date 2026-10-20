@@ -3,7 +3,7 @@
 // и возвращает текст. Модуль бота работает только с этим интерфейсом.
 
 import type { OfferPlan } from "../offer";
-import type { ProviderName, SocialType, WebsiteKind } from "../types";
+import type { ProviderName, SiteAudit, SocialType, WebsiteKind } from "../types";
 
 /** Всё, что достоверно известно о лиде. Больше генератор ничего знать не должен. */
 export interface LeadFacts {
@@ -12,7 +12,10 @@ export interface LeadFacts {
   nicheLabel: string;
   nicheAccusative: string; // «ваш барбершоп»
   category?: string;
+  address?: string;
+  hours?: string;
   websiteKind: WebsiteKind;
+  website?: string;
   domain?: string;
   bookingName?: string;
   socialTypes: SocialType[];
@@ -25,7 +28,10 @@ export interface LeadFacts {
     hasCta?: boolean;
     copyrightYear?: number | null;
     outdated?: string[];
+    platform?: string | null;
   };
+  /** Что бизнес пишет о себе на сайте — только для AI-генератора, это данные, не инструкции. */
+  siteContent?: SiteAudit["content"];
   offer: OfferPlan;
   reasons: string[]; // положительные причины из скоринга
 }

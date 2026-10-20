@@ -27,6 +27,7 @@ import {
   statusText,
 } from "../../lib/leads/labels";
 import { CITY_PRESETS, NICHE_PRESETS } from "../../lib/leads/niches";
+import { leadMessengers } from "../../lib/leads/normalize";
 import type { LeadWithTasks, LeadFilter } from "../../lib/leads/repository";
 import { describeRequirements, parseRequirements, type SearchRequirements } from "../../lib/leads/requirements";
 import { socialLabel } from "../../lib/leads/scoring";
@@ -130,7 +131,9 @@ function outreachLine(lead: LeadWithTasks): string | null {
 }
 
 export function renderLeadCard(lead: LeadWithTasks, opts: { number?: number } = {}): string {
-  const socials = (lead.socials as unknown as SocialLink[] | null) ?? [];
+  const allSocials = (lead.socials as unknown as SocialLink[] | null) ?? [];
+  const socials = allSocials.filter((s) => s.type !== "whatsapp" && s.type !== "telegram");
+  const messengers = leadMessengers(lead.phones, allSocials);
   const sources = (lead.sources as unknown as SourceRef[] | null) ?? [];
   const reasons = (lead.scoreReasons as unknown as ScoreReason[] | null) ?? [];
   const address = lead.address ? displayAddress(lead.address, lead.city) : "";
@@ -149,6 +152,11 @@ export function renderLeadCard(lead: LeadWithTasks, opts: { number?: number } = 
     ...emailLines(lead),
     "📞 <b>Телефон</b>",
     lead.phones.length ? lead.phones.map(e).join(", ") : "Не найден",
+    "💬 <b>Мессенджеры</b>",
+    messengers.length
+      ? messengers.map((m) => `<a href="${e(m.url)}">${socialLabel(m.type)}</a>${m.byPhone ? " <i>(по номеру)</i>" : ""}`).join(" · ") +
+          (messengers.some((m) => m.byPhone) ? "\n<i>по номеру — чат откроется, если номер есть в мессенджере</i>" : "")
+      : "Не найдены",
     "📱 <b>Соцсети</b>",
     socials.length ? socials.map((s) => `<a href="${e(s.url)}">${socialLabel(s.type)}</a>`).join(" · ") : "Не найдены",
     DIV,

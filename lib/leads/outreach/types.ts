@@ -19,6 +19,8 @@ export interface OutreachRequest {
   sender: SenderProfile;
   /** Номер варианта формулировки — для «🔄 Другой вариант». */
   variant: number;
+  /** Текст прошлого варианта: AI пишет новый заметно иначе. */
+  previous?: string;
 }
 
 export interface OutreachText {
@@ -26,6 +28,8 @@ export interface OutreachText {
   body: string;
   /** Что стоит поправить перед отправкой («нет имени в подписи»). */
   warnings: string[];
+  /** AI не ответил и текст собран шаблоном — почему (показывается пользователю). */
+  fallback?: string;
 }
 
 export interface OutreachGenerator {

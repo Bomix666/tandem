@@ -44,6 +44,8 @@ export interface LeadDTO {
   /** Email с проверкой; пусто у старых лидов — тогда показываются emails. */
   contacts: LeadContactDTO[];
   socials: { type: string; label: string; url: string }[];
+  /** WhatsApp / Telegram: с сайта или по мобильному номеру (byPhone — не проверено). */
+  messengers: { type: string; label: string; url: string; byPhone: boolean }[];
   hours: string | null;
   sources: { provider: string; label: string; url: string }[];
   score: number;

@@ -3,6 +3,7 @@
 // что пользователь заполнил в настройках.
 
 import type { OutreachChannel } from "@prisma/client";
+import { socialFromHandle } from "../normalize";
 import { observation, renderTemplateProposal } from "../proposal/template";
 import type { LeadFacts } from "../proposal/types";
 import type { OutreachGenerator, OutreachRequest, OutreachText, SenderProfile } from "./types";
@@ -17,9 +18,16 @@ function subjects(f: LeadFacts): string[] {
   return [`Сайт для «${f.name}»`, `Предложение для «${f.name}»`, `Идея для «${f.name}»`];
 }
 
-function signature(s: SenderProfile): string[] {
+// «@nick» или t.me/nick в подписи — получатель не поймёт, что это Telegram: пишем явно и ссылкой.
+function contactLine(contact: string): string {
+  const v = contact.trim();
+  const tg = /^@[\w.]+$/.test(v) || /^(https?:\/\/)?(t|telegram)\.me\//i.test(v) ? socialFromHandle("telegram", v) : null;
+  return tg ? `Telegram для связи: ${tg.url}` : v;
+}
+
+export function signature(s: SenderProfile): string[] {
   const who = [s.name, s.company].filter(Boolean).join(", ");
-  return [who || null, s.portfolioUrl ? `Портфолио: ${s.portfolioUrl}` : null, s.contact || null].filter((l): l is string => !!l);
+  return [who || null, s.portfolioUrl ? `Портфолио: ${s.portfolioUrl}` : null, s.contact ? contactLine(s.contact) : null].filter((l): l is string => !!l);
 }
 
 function shortOffer(f: LeadFacts): string {
@@ -85,7 +93,7 @@ function render(channel: OutreachChannel, req: OutreachRequest): OutreachText {
 
 export const templateOutreachGenerator: OutreachGenerator = {
   id: "template",
-  label: "шаблон по фактам (AI не подключён)",
+  label: "шаблон по фактам",
   async generate(req) {
     return render(req.channel, req);
   },

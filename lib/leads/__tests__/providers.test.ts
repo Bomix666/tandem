@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveNiche } from "../niches";
+import { matchesNiche, resolveNiche } from "../niches";
 import { buildOverpassQuery, parseOverpass } from "../providers/osm";
 import { parseYandexResponse, ProviderError, resetYandexState, searchYandex } from "../providers/yandex";
 
@@ -94,8 +94,7 @@ describe("барбершоп ≠ любая парикмахерская", () =>
     });
     expect(items.map((i) => i.categories[0])).toEqual(["Барбершоп", "Парикмахерская"]);
   });
-  it("обычная парикмахерская не засчитывается как совпадение с нишей «Барбершопы»", async () => {
-    const { matchesNiche } = await import("../niches");
+  it("обычная парикмахерская не засчитывается как совпадение с нишей «Барбершопы»", () => {
     const n = resolveNiche("Барбершопы");
     expect(matchesNiche(n, ["Парикмахерская"], "Салон Анна")).toBe(false);
     expect(matchesNiche(n, ["Парикмахерская"], "Barber Club")).toBe(true);
@@ -130,6 +129,19 @@ describe("resolveNiche", () => {
     expect(resolveNiche("Барбершопы").key).toBe("barbershop");
     expect(resolveNiche("стоматологии").key).toBe("dentistry");
     expect(resolveNiche("Автомойки").key).toBe("custom");
+  });
+});
+
+describe("своя ниша: общие слова вроде «магазин» не в счёт", () => {
+  it("«Магазин игрушек» — не любой магазин", () => {
+    const n = resolveNiche("Магазин игрушек");
+    expect(n.keywords).toEqual(["игруш"]);
+    expect(matchesNiche(n, ["Цветочный магазин"], "Лепесток")).toBe(false);
+    expect(matchesNiche(n, ["Магазин игрушек"], "Детский мир")).toBe(true);
+    expect(buildOverpassQuery(n, [1, 2, 3, 4])).toContain('nwr["shop"]["name"~"игруш",i](1,2,3,4);');
+  });
+  it("если общие все слова — ищем по ним, а не по пустому списку", () => {
+    expect(resolveNiche("Магазин").keywords).toEqual(["магаз"]);
   });
 });
 

@@ -34,6 +34,10 @@ RUN npm run build
 # --- рантайм ---
 FROM base AS runtime
 ENV NODE_ENV=production
+# Claude Code — письма по подписке Claude (CLAUDE_CODE_OAUTH_TOKEN в .env),
+# см. lib/leads/outreach/claude.ts. Версия закреплена, как на машине разработки.
+RUN apk add --no-cache libgcc libstdc++ ripgrep && npm install -g @anthropic-ai/claude-code@2.1.281
+ENV USE_BUILTIN_RIPGREP=0
 COPY --from=build /app/public ./public
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/node_modules ./node_modules

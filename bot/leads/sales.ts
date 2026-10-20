@@ -16,6 +16,7 @@ import {
   discardDraft,
   editOutreachText,
   getOutreach,
+  generatorLabel,
   getOutreachGenerator,
   listOutreach,
   markOutreachSent,
@@ -69,6 +70,8 @@ const OUTCOME_TOAST: Record<OutreachOutcome, string> = { replied: "👀 Отве
 
 export function registerSalesOs(bot: Bot, shared: SalesShared) {
   const { resolveCtx } = shared;
+  /** Лид:канал, по которым Claude сейчас пишет текст, — без двойных черновиков. */
+  const writing = new Set<string>();
 
   // ---------------- экраны ----------------
 
@@ -87,7 +90,7 @@ export function registerSalesOs(bot: Bot, shared: SalesShared) {
     if (!o) return "Обращение не найдено";
     const view = outreachEditorView(o, {
       warnings: await outreachWarnings(o),
-      engine: getOutreachGenerator().generator.label,
+      engine: generatorLabel(o.generator),
       mailUrl: o.channel === "EMAIL" ? outreachMailUrl(o.id) : null,
       notice,
     });
@@ -98,9 +101,27 @@ export function registerSalesOs(bot: Bot, shared: SalesShared) {
   async function prepare(ctx: Context, c: Ctx, leadId: string, channel: OutreachChannel, regenerate = false): Promise<string | undefined> {
     const lead = await getLead(leadId, c.workspace.id);
     if (!lead) return "Лид не найден";
-    const p = await prepareOutreach({ lead, channel, actorId: c.user.id, regenerate });
-    await editor(ctx, c, p.outreach.id, "edit", p.reused ? "📝 <i>Открыт сохранённый черновик — новый не создавал.</i>" : regenerate ? "🔄 <i>Новый вариант текста.</i>" : undefined);
-    return p.reused ? "Открыл черновик" : regenerate ? "Новый вариант" : "Черновик готов";
+    const key = `${lead.id}:${channel}`;
+    if (writing.has(key)) return "✍️ Уже пишу, подожди";
+    const finish = async () => {
+      const p = await prepareOutreach({ lead, channel, actorId: c.user.id, regenerate });
+      const notice = p.reused ? "📝 <i>Открыт сохранённый черновик — новый не создавал.</i>" : regenerate ? "🔄 <i>Новый вариант текста.</i>" : undefined;
+      await editor(ctx, c, p.outreach.id, "edit", [notice, p.note && !p.reused ? `⚠️ <i>${e(p.note)}</i>` : null].filter(Boolean).join("\n") || undefined);
+      return p.reused ? "Открыл черновик" : regenerate ? "Новый вариант" : "Черновик готов";
+    };
+    if (getOutreachGenerator().generator.id !== "claude") return finish();
+
+    // Claude пишет 10–40 с: не держим очередь бота — показываем «пишу…» и дописываем в фоне
+    writing.add(key);
+    await show(ctx, { text: `✍️ Пишу текст под «${e(lead.name)}»…\n<i>Claude смотрит сайт и данные бизнеса, это до минуты.</i>`, kb: new InlineKeyboard() }, "edit");
+    void finish()
+      .catch(async (err) => {
+        const { redactError } = await import("../../lib/leads/redact");
+        console.error("Outreach prepare failed:", redactError(err));
+        await show(ctx, { text: "Не получилось подготовить текст, попробуй ещё раз.", kb: new InlineKeyboard().text("‹ К лиду", `ld:bk:${lead.id}`) }, "edit").catch(() => void 0);
+      })
+      .finally(() => writing.delete(key));
+    return "✍️ Пишу…";
   }
 
   async function followUpTarget(c: Ctx, scope: string, id: string): Promise<FollowUpTarget | null> {

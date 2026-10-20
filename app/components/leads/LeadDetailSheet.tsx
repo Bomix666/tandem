@@ -333,6 +333,27 @@ export function LeadDetailSheet({ ids, index, refreshKey, onNavigate, onClose, o
             </div>
 
             <div className="kv">
+              <div className="k">Мессенджеры</div>
+              {shown.messengers.length ? (
+                <>
+                  <div className="linkchips">
+                    {shown.messengers.map((m) => (
+                      <button key={m.url} className="linkchip" onClick={() => openExternalLink(m.url)}>
+                        {m.label}
+                        {m.byPhone ? " · по номеру" : ""} ↗
+                      </button>
+                    ))}
+                  </div>
+                  {shown.messengers.some((m) => m.byPhone) && (
+                    <div className="v missing">По номеру — чат откроется, если номер есть в мессенджере.</div>
+                  )}
+                </>
+              ) : (
+                <div className="v missing">Не найдены</div>
+              )}
+            </div>
+
+            <div className="kv">
               <div className="k">Соцсети</div>
               {shown.socials.length ? (
                 <div className="linkchips">
@@ -418,9 +439,9 @@ export function LeadDetailSheet({ ids, index, refreshKey, onNavigate, onClose, o
 }
 
 function channelContact(lead: LeadDTO, channel: OutreachChannelDTO): string {
-  const has = (t: string) => lead.socials.some((s) => s.type === t);
-  if (channel === "TELEGRAM") return has("telegram") ? "есть контакт" : "нет контакта — текст скопируешь";
-  if (channel === "WHATSAPP") return has("whatsapp") || lead.phones.length ? "есть номер" : "нет номера — текст скопируешь";
+  const m = (t: string) => lead.messengers.find((x) => x.type === t);
+  if (channel === "TELEGRAM") return m("telegram") ? (m("telegram")!.byPhone ? "по номеру" : "есть контакт") : "нет контакта — текст скопируешь";
+  if (channel === "WHATSAPP") return m("whatsapp") || lead.phones.length ? "есть номер" : "нет номера — текст скопируешь";
   const pages = lead.socials.filter((s) => s.type === "vk" || s.type === "instagram").map((s) => s.label);
   return pages.length ? pages.join(", ") : "нет страниц — текст скопируешь";
 }

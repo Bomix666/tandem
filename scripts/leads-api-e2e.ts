@@ -247,6 +247,11 @@ async function main() {
       page.status === 200 && html.includes(`href="mailto:info@lavka-barber.ru?subject=`) && html.includes("Бот ничего не отправляет сам") && (await prisma.outreach.findUniqueOrThrow({ where: { id: lvOutreach.id } })).status === "READY",
       `${page.status} ${lvDraft.json.recipient}`
     );
+    check(
+      "/go/mail: «Открыть в Outlook» — письмо в веб-Outlook, личном и рабочем",
+      html.includes('href="https://outlook.live.com/mail/0/deeplink/compose?to=info%40lavka-barber.ru&amp;subject=') &&
+        html.includes('href="https://outlook.office.com/mail/deeplink/compose?to=info%40lavka-barber.ru&amp;subject=')
+    );
     const forged = await mail.GET(new Request(`https://app.example/go/mail/${lvOutreach.id}?t=000000000000000000000000`), { params: { id: lvOutreach.id } });
     check("/go/mail: без верной подписи — 404", forged.status === 404);
     list = await call(leads.GET as Handler, "GET", "/api/leads?filter=w", 1);
