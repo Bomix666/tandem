@@ -62,6 +62,7 @@ import {
   type Nav,
 } from "./format";
 import { ignoreNotModified, show, type Ctx, type ShowMode } from "./context";
+import { registerMail } from "./mail";
 import { launchSearch, searchNav } from "./runner";
 import { registerSalesOs } from "./sales";
 
@@ -491,6 +492,8 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
   // (до текстового обработчика ниже — кнопки меню внизу важнее ожидаемого ввода)
 
   const sales = registerSalesOs(bot, { resolveCtx, openLead, showMyLeads, startWizard, showSettings, appUrl: deps.appUrl });
+  const mail = registerMail(bot, { resolveCtx, showSettings });
+  mail.startPolling();
 
   // ---------------- регистрация ----------------
 
@@ -551,6 +554,7 @@ export function registerLeadsModule(bot: Bot, deps: LeadsModuleDeps) {
 
     if (st.kind === "lead_wizard") return wizardText(ctx, c, st, text);
     if (await sales.handleText(ctx, c, st, text)) return;
+    if (await mail.handleText(ctx, c, st, text)) return;
     if (st.kind === "lead_name_query") {
       if (text.length < 2) {
         await ctx.reply("Нужно хотя бы 2 символа.");

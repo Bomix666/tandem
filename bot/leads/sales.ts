@@ -3,8 +3,8 @@
 // Навигация кнопками редактирует одно сообщение; новое сообщение — только для
 // «📋 Копировать», запросов текста и кнопок меню внизу чата.
 //
-// Ничего не отправляется клиенту автоматически: бот готовит текст и ссылку,
-// «✅ Я отправил» нажимает пользователь.
+// Без спроса клиенту ничего не уходит: письмо — по кнопке «📤 Отправить через
+// Gmail» (bot/leads/mail.ts), остальное пользователь отправляет сам и жмёт «✅ Я отправил».
 
 import type { OutreachChannel } from "@prisma/client";
 import { InlineKeyboard, type Bot, type Context } from "grammy";
@@ -26,6 +26,7 @@ import {
   setOutreachOutcome,
   type OutreachOutcome,
 } from "../../lib/leads/outreach";
+import { getMailAccount } from "../../lib/leads/mail/account";
 import { outreachMailUrl } from "../../lib/leads/outreach/links";
 import { getLead, type LeadFilter } from "../../lib/leads/repository";
 import { daysFromNow, parseUserDate } from "../../lib/leads/time";
@@ -92,6 +93,7 @@ export function registerSalesOs(bot: Bot, shared: SalesShared) {
       warnings: await outreachWarnings(o),
       engine: generatorLabel(o.generator),
       mailUrl: o.channel === "EMAIL" ? outreachMailUrl(o.id) : null,
+      gmail: o.channel === "EMAIL" && !!(await getMailAccount(c.workspace.id)),
       notice,
     });
     await show(ctx, view, mode);

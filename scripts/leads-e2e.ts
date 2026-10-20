@@ -139,6 +139,10 @@ function startBot(withYandex: boolean) {
     TELEGRAM_BOT_TOKEN: TOKEN,
     TELEGRAM_WEBAPP_URL: "https://example.test",
     APP_URL: "https://example.test", // не из .env: Prisma подмешивает его в окружение
+    LEADS_PROPOSAL_ENGINE: "template", // тексты в проверках — шаблоном, без настоящего Claude
+    LEADS_MAIL_POLL_MS: "0",
+    GMAIL_SMTP_HOST: "127.0.0.1", // в настоящий Gmail тест не ходит: соединение отклоняется
+    GMAIL_IMAP_HOST: "127.0.0.1",
     TELEGRAM_API_ROOT: `http://127.0.0.1:${port}`,
     ...fakeSourcesEnv(port, withYandex),
   };
@@ -531,8 +535,32 @@ async function main() {
     await waitMessage(mark, (m) => m.text.includes("Как тебя зовут"), "запрос имени");
     mark = calls.length;
     sendText("Никита");
-    await waitMessage(mark, (m) => m.text.includes("Имя: Никита"), "имя в настройках");
+    const named = await waitMessage(mark, (m) => m.text.includes("Имя: Никита"), "имя в настройках");
     check("⚙️ подпись: имя сохраняется", (await prisma.leadSettings.findUnique({ where: { workspaceId: ws.id } }))?.senderName === "Никита");
+
+    // ===== Gmail: подключение (без настоящего Gmail — вход не удаётся) =====
+    check("⚙️ в настройках — Gmail и цены для Claude", named.text.includes("Письма через Gmail") && buttons(named.message_id).some((b) => b.text === "📧 Gmail"), named.text);
+    mark = calls.length;
+    press(named.message_id, "📧 Gmail");
+    const gm = await waitMessage(mark, (m) => m.message_id === named.message_id && m.text.includes("GMAIL ДЛЯ ПИСЕМ"), "экран Gmail");
+    check("📧 Gmail: не подключён, есть кнопка «Подключить»", gm.text.includes("Не подключён") && buttons(gm.message_id).some((b) => b.text === "✏️ Подключить Gmail"));
+    mark = calls.length;
+    press(gm.message_id, "✏️ Подключить Gmail");
+    await waitMessage(mark, (m) => m.text.includes("Пришли адрес Gmail"), "запрос адреса");
+    mark = calls.length;
+    sendText("info@yandex.ru");
+    await waitMessage(mark, (m) => m.text.includes("Нужен адрес Gmail"), "не Gmail");
+    mark = calls.length;
+    sendText("studio.test@gmail.com");
+    await waitMessage(mark, (m) => m.text.includes("пароль приложения"), "запрос пароля");
+    mark = calls.length;
+    const passwordMessageId = nextUserMessageId;
+    sendText("abcd efgh ijkl mnop");
+    await waitMessage(mark, (m) => m.text.includes("Не достучался до Gmail") || m.text.includes("Google не принял"), "проверка входа");
+    check(
+      "🔑 сообщение с паролем удалено из чата; без входа в Gmail ящик не сохраняется",
+      calls.slice(mark).some((c) => c.method === "deleteMessage" && Number(c.body.message_id) === passwordMessageId) && !(await prisma.leadSettings.findUnique({ where: { workspaceId: ws.id } }))?.gmailUser
+    );
 
     // ===== Яндекс не настроен =====
     await stopBot();

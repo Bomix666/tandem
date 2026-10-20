@@ -35,6 +35,7 @@ async function main() {
     NODE_ENV: "test",
     ALLOW_DEV_AUTH: "true",
     TELEGRAM_BOT_TOKEN: "123456:E2E-TEST-TOKEN",
+    LEADS_PROPOSAL_ENGINE: "template", // не из .env: тексты в проверках — шаблоном, без настоящего Claude
     ...fakeSourcesEnv(sources.port),
   });
 
@@ -356,6 +357,67 @@ async function main() {
     });
     const delForeign = await call(taskRoute.DELETE as Handler, "DELETE", `/api/tasks/${foreignTask.id}`, 1, undefined, { id: foreignTask.id });
     check("задачу из чужого пространства удалить нельзя → 404, задача на месте", delForeign.status === 404 && !!(await prisma.task.findUnique({ where: { id: foreignTask.id } })));
+
+    // ===== Gmail: письмо по кнопке → ответ клиента находит переписку → наш ответ в ту же цепочку =====
+    const { getMailAccount, saveMailAccount } = await import("../lib/leads/mail/account");
+    const { sendOutreachEmail, sendReplyDraft } = await import("../lib/leads/mail/send");
+    const { handleIncoming } = await import("../lib/leads/mail/inbox");
+    const nodemailer = (await import("nodemailer")).default;
+    const json = nodemailer.createTransport({ jsonTransport: true });
+    const sentMail: Record<string, unknown>[] = [];
+    // вместо SMTP Gmail: письмо собирается nodemailer'ом и остаётся у нас для проверки
+    const spy = {
+      sendMail: async (m: Parameters<typeof json.sendMail>[0]) => {
+        const info = await json.sendMail(m);
+        sentMail.push(JSON.parse(String(info.message)));
+        return info;
+      },
+    } as unknown as import("nodemailer").Transporter;
+    await saveMailAccount(ws.id, "studio.test@gmail.com", "abcdefghijklmnop", 0);
+    const stored = await prisma.leadSettings.findUniqueOrThrow({ where: { workspaceId: ws.id } });
+    check("Gmail: пароль приложения в базе зашифрован", stored.gmailPassword !== "abcdefghijklmnop" && (await getMailAccount(ws.id))?.pass === "abcdefghijklmnop");
+    const gPrep = await call(leadOutreach.POST as Handler, "POST", `/api/leads/${lv.id}/outreach`, 1, { channel: "EMAIL" }, { id: lv.id });
+    const gid: string = gPrep.json.outreach.id;
+    const sentFirst = await sendOutreachEmail(gid, ws.id, me.id, spy);
+    const firstOut = await prisma.outreachMessage.findFirst({ where: { outreachId: gid, direction: "OUT" } });
+    check(
+      "📤 письмо ушло через Gmail: «Отправлено», Message-ID для поиска ответа сохранён",
+      sentFirst.ok && (await prisma.outreach.findUniqueOrThrow({ where: { id: gid } })).status === "SENT" && !!firstOut?.messageId && JSON.stringify(sentMail[0]).includes("info@lavka-barber.ru"),
+      [sentFirst, sentMail[0]]
+    );
+    const sentTwice = await sendOutreachEmail(gid, ws.id, me.id, spy);
+    check("повторное нажатие не отправляет письмо второй раз", !sentTwice.ok && sentMail.length === 1);
+
+    const base = { references: [] as string[], subject: "Re: Сайт", date: new Date(), auto: false, bounce: false, failedRecipients: [] as string[] };
+    const ev1 = await handleIncoming(ws.id, {
+      ...base,
+      uid: 1,
+      messageId: "<r1@lavka-barber.ru>",
+      inReplyTo: firstOut!.messageId,
+      from: "info@lavka-barber.ru",
+      text: "Добрый день! Интересно, сколько стоит?\n\nпн, 20 окт. 2026 г. в 12:00, Studio <studio.test@gmail.com>:\n> Добрый день!",
+    });
+    check(
+      "📩 ответ клиента: нашёл переписку, без цитаты, «Ответ получен», лид «Переговоры»",
+      ev1?.kind === "reply" && ev1.message.body === "Добрый день! Интересно, сколько стоит?" && (await prisma.outreach.findUniqueOrThrow({ where: { id: gid } })).status === "REPLIED" && (await prisma.lead.findUniqueOrThrow({ where: { id: lv.id } })).status === "NEGOTIATION",
+      ev1
+    );
+    const dupIn = await handleIncoming(ws.id, { ...base, uid: 1, messageId: "<r1@lavka-barber.ru>", inReplyTo: firstOut!.messageId, from: "info@lavka-barber.ru", text: "Добрый день!" });
+    const byAddress = await handleIncoming(ws.id, { ...base, uid: 2, messageId: "<r2@lavka-barber.ru>", inReplyTo: null, from: "info@lavka-barber.ru", text: "И ещё: а сроки?" });
+    const strangerMail = await handleIncoming(ws.id, { ...base, uid: 3, messageId: "<ad@spam.example>", inReplyTo: null, from: "promo@spam.example", text: "Скидки!" });
+    check("то же письмо второй раз не разбирается; без заголовков — по адресу; чужое — мимо", dupIn === null && byAddress?.kind === "reply" && byAddress.outreach.id === gid && strangerMail === null);
+
+    const draft = await prisma.outreachMessage.create({ data: { outreachId: gid, direction: "OUT", subject: "Re: Сайт", body: "Спасибо! Лендинг — от 30 000 ₽, 7–10 дней." } });
+    const sentReply = await sendReplyDraft(draft.id, ws.id, me.id, spy);
+    const replyMail = sentMail[1] ?? {};
+    check(
+      "📤 ответ ушёл в ту же переписку: In-Reply-To — последнее письмо клиента, References — вся цепочка",
+      sentReply.ok && replyMail.inReplyTo === "<r2@lavka-barber.ru>" && JSON.stringify(replyMail.references).includes(firstOut!.messageId!) && !!(await prisma.outreachMessage.findUniqueOrThrow({ where: { id: draft.id } })).sentAt,
+      replyMail
+    );
+
+    const bounced = await handleIncoming(ws.id, { ...base, uid: 4, messageId: "<dsn@googlemail.com>", inReplyTo: null, references: [firstOut!.messageId!], from: "mailer-daemon@googlemail.com", text: "Address not found", bounce: true, failedRecipients: ["info@lavka-barber.ru"] });
+    check("недоставка: адрес отмечен 🔴", bounced?.kind === "bounce" && (await prisma.leadContact.findFirstOrThrow({ where: { leadId: lv.id, value: "info@lavka-barber.ru" } })).verification === "INVALID", bounced);
 
     const other = await prisma.workspace.create({ data: {} });
     const foreign = await prisma.lead.create({ data: { workspaceId: other.id, name: "Чужой", normName: "чужой", city: "Москва", niche: "x", sources: [] } });

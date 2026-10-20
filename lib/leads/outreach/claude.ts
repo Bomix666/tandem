@@ -63,13 +63,9 @@ function lines(pairs: [string, unknown][]): string {
 
 const yesNo = (v: boolean | undefined, yes: string, no: string) => (v === undefined ? undefined : v ? yes : no);
 
-/** Промпт из фактов о лиде. Экспорт — для теста. */
-export function buildPrompt(req: OutreachRequest): string {
-  const f = req.facts;
-  const s = f.site;
-  const c = f.siteContent;
-  const parts = [
-    `<business>\n${lines([
+/** Что мы знаем о бизнесе — для первого письма и для ответов в переписке. */
+export function businessBlock(f: LeadFacts): string {
+  return `<business>\n${lines([
       ["Название", f.name],
       ["Город", f.city],
       ["Адрес", f.address],
@@ -80,7 +76,16 @@ export function buildPrompt(req: OutreachRequest): string {
       ["Сайт", f.websiteKind === "own" ? `${f.domain ?? "есть"} (свой сайт)` : WEBSITE_KIND[f.websiteKind]],
       ["Страница онлайн-записи", f.bookingName],
       ["Соцсети и мессенджеры", f.socialTypes.map(socialLabel)],
-    ])}\n</business>`,
+    ])}\n</business>`;
+}
+
+/** Промпт из фактов о лиде. Экспорт — для теста. */
+export function buildPrompt(req: OutreachRequest): string {
+  const f = req.facts;
+  const s = f.site;
+  const c = f.siteContent;
+  const parts = [
+    businessBlock(f),
     s
       ? `<site_check>\n${lines([
           ["Открывается", yesNo(s.reachable, "да", "нет, сейчас не открывается")],
@@ -129,8 +134,8 @@ export function readClaudeCodeResult(stdout: string): string {
  * По подписке: Claude Code без инструментов и без сохранения сессий. Промпт —
  * через stdin, cwd — временная папка, чтобы не подхватить CLAUDE.md проекта.
  */
-function viaClaudeCode(prompt: string): Promise<string> {
-  const args = ["-p", "--output-format", "json", "--json-schema", JSON.stringify(OUTPUT_SCHEMA), "--model", MODEL, "--system-prompt", SYSTEM, "--no-session-persistence", "--tools", ""];
+function viaClaudeCode(system: string, schema: object, prompt: string): Promise<string> {
+  const args = ["-p", "--output-format", "json", "--json-schema", JSON.stringify(schema), "--model", MODEL, "--system-prompt", system, "--no-session-persistence", "--tools", ""];
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY; // пустой ключ из .env не должен перебивать токен подписки
   return new Promise((resolve, reject) => {
@@ -149,18 +154,23 @@ function viaClaudeCode(prompt: string): Promise<string> {
 
 let client: Anthropic | null = null;
 
-async function viaApi(prompt: string): Promise<string> {
+async function viaApi(system: string, schema: object, prompt: string): Promise<string> {
   client ??= new Anthropic({ timeout: 90_000, maxRetries: 1 });
   const res = await client.messages.create({
     model: MODEL,
     max_tokens: 16000,
-    output_config: { effort: "medium", format: { type: "json_schema", schema: OUTPUT_SCHEMA } },
-    system: SYSTEM,
+    output_config: { effort: "medium", format: { type: "json_schema", schema: schema as Record<string, unknown> } },
+    system,
     messages: [{ role: "user", content: prompt }],
   });
   if (res.stop_reason !== "end_turn") throw new Error(`stop_reason: ${res.stop_reason}`);
   const block = res.content.find((b) => b.type === "text");
   return block?.type === "text" ? block.text : "";
+}
+
+/** JSON-ответ Claude по схеме: по API-ключу, а без него — по подписке через Claude Code. */
+export function askClaude(system: string, schema: object, prompt: string): Promise<string> {
+  return process.env.ANTHROPIC_API_KEY ? viaApi(system, schema, prompt) : viaClaudeCode(system, schema, prompt);
 }
 
 export const claudeOutreachGenerator: OutreachGenerator = {
@@ -169,7 +179,7 @@ export const claudeOutreachGenerator: OutreachGenerator = {
   async generate(req): Promise<OutreachText> {
     try {
       const prompt = buildPrompt(req);
-      const out = parseOutput(process.env.ANTHROPIC_API_KEY ? await viaApi(prompt) : await viaClaudeCode(prompt));
+      const out = parseOutput(await askClaude(SYSTEM, OUTPUT_SCHEMA, prompt));
       const sign = req.channel === "EMAIL" ? signature(req.sender) : [];
       return {
         subject: req.channel === "EMAIL" ? out.subject || undefined : undefined,

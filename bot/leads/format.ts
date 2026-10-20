@@ -455,6 +455,8 @@ export interface SenderSettings {
   companyName: string | null;
   portfolioUrl: string | null;
   senderContact: string | null;
+  gmailUser: string | null;
+  priceInfo: string | null;
 }
 
 export function settingsText(
@@ -473,6 +475,10 @@ export function settingsText(
     `Портфолио: ${v(s.portfolioUrl)}`,
     `Контакт: ${v(s.senderContact)}`,
     "",
+    "📧 <b>Письма через Gmail</b>",
+    `Ящик: ${s.gmailUser ? `✅ ${e(s.gmailUser)}` : "<i>не подключён</i>"}`,
+    `Цены и сроки для ответов Claude: ${v(s.priceInfo)}`,
+    "",
     "<b>Источники</b>",
     `🗺 OpenStreetMap (основной): ${s.osm ? `✅ ${e(s.osmLocal)}` : "выключен (LEADS_OSM_ENABLED=false)"}`,
     `🧪 Яндекс Карты (тест): ${s.yandex ? "ключ подключён" : "не подключён"}`,
@@ -489,6 +495,9 @@ export function settingsKeyboard(): InlineKeyboard {
     .row()
     .text("✏️ Портфолио", "ld:set:portfolio")
     .text("✏️ Контакт", "ld:set:contact")
+    .row()
+    .text("📧 Gmail", "ml:gm")
+    .text("💰 Цены и сроки", "ml:pr")
     .row()
     .text("🏠 Меню", "os:home");
 }

@@ -112,7 +112,7 @@ export function outreachOverviewView(counts: Record<OutreachStatus, number>, tod
     table(OUTREACH_STATUS_ORDER.map((s) => [OUTREACH_STATUS_LABELS[s], counts[s]])),
     `Сегодня: ${today.drafted} подготовлено · ${today.sent} отправлено · ${today.replies} ${plural(today.replies, ["ответ", "ответа", "ответов"])}`,
     "",
-    "<i>Письма и сообщения готовит бот, отправляешь ты сам — так проверяем качество лидов и текстов.</i>",
+    "<i>Письма и сообщения готовит бот, отправка — только по твоей кнопке.</i>",
   ].join("\n");
   const kb = new InlineKeyboard();
   OUTREACH_STATUS_ORDER.forEach((s, i) => {
@@ -173,7 +173,8 @@ function openButton(o: OutreachWithLead, mailUrl: string | null): { text: string
   return { text: label, url: handoff.url };
 }
 
-export function outreachEditorView(o: OutreachWithLead, opts: { warnings: string[]; engine: string; mailUrl: string | null; notice?: string }): View {
+export function outreachEditorView(o: OutreachWithLead, opts: { warnings: string[]; engine: string; mailUrl: string | null; gmail?: boolean; notice?: string }): View {
+  const viaGmail = !!opts.gmail && o.channel === "EMAIL" && !!o.recipient;
   const body = o.body.length > BODY_LIMIT ? `${o.body.slice(0, BODY_LIMIT)}…\n(полный текст — «📋 Копировать»)` : o.body;
   const lines = [
     crumbs("Outreach", o.lead.name),
@@ -187,12 +188,14 @@ export function outreachEditorView(o: OutreachWithLead, opts: { warnings: string
   if (o.repliedAt) lines.push(`👀 Ответ: ${formatDay(o.repliedAt)}`);
   if (EDITABLE.includes(o.status)) {
     lines.push(...opts.warnings.map((w) => `⚠️ ${e(w)}`));
-    lines.push(`<i>${o.generator === "manual" ? "Текст отредактирован вручную" : `Сделано: ${e(opts.engine)}`}. Бот ничего не отправляет сам — проверь и отправь.</i>`);
+    const how = viaGmail ? "Проверь и нажми «📤 Отправить через Gmail»." : "Бот ничего не отправляет сам — проверь и отправь.";
+    lines.push(`<i>${o.generator === "manual" ? "Текст отредактирован вручную" : `Сделано: ${e(opts.engine)}`}. ${how}</i>`);
   }
 
   const kb = new InlineKeyboard();
   const open = openButton(o, opts.mailUrl);
   if (EDITABLE.includes(o.status)) {
+    if (viaGmail) kb.text("📤 Отправить через Gmail", `ml:sq:${o.id}`).row();
     kb.text("✏️ Редактировать", `os:oe:${o.id}`).text("📋 Копировать", `os:oc:${o.id}`).row();
     if (open) kb.url(open.text, open.url);
     kb.text("🔄 Другой вариант", `os:or:${o.id}`).row();
@@ -239,7 +242,7 @@ export function channelPickerView(lead: LeadWithTasks): View {
     `📱 <b>WhatsApp</b> — коротко и по-разговорному · ${has("whatsapp") || lead.phones.length ? "есть номер" : "<i>нет номера</i>"}`,
     `🌐 <b>Соцсети</b> — очень коротко · ${has("vk") || has("instagram") ? socials.filter((s) => s.type === "vk" || s.type === "instagram").map((s) => (s.type === "vk" ? "VK" : "Instagram")).join(", ") : "<i>нет страниц</i>"}`,
     "",
-    "<i>Ничего не отправляется автоматически: бот готовит текст, отправляешь ты.</i>",
+    "<i>Без твоей кнопки ничего не отправляется: письмо — через Gmail, остальное — ты сам.</i>",
   ];
   const kb = new InlineKeyboard()
     .text("📧 Email", `os:pe:${lead.id}`)

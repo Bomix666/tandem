@@ -397,6 +397,13 @@ model LeadSettings {
   companyName   String? // студия / компания
   portfolioUrl  String?
   senderContact String? // телефон или Telegram для подписи
+  priceInfo     String? // цены и сроки, которые Claude может называть в ответах клиентам
+
+  // Gmail для отправки писем и чтения ответов (lib/leads/mail): пароль
+  // приложения Google — зашифрован (lib/leads/mail/account.ts)
+  gmailUser     String?
+  gmailPassword String?
+  gmailLastUid  Int? // последнее прочитанное письмо во «Входящих» (UID IMAP)
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
@@ -526,11 +533,34 @@ model Outreach {
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
-  lead    Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  contact LeadContact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  lead     Lead              @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  contact  LeadContact?      @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  messages OutreachMessage[]
 
   @@index([workspaceId, status])
   @@index([leadId, createdAt])
+}
+
+enum MailDirection {
+  OUT // наше письмо (sentAt пусто — черновик ответа от Claude, ждёт одобрения)
+  IN  // письмо клиента
+}
+
+// Переписка по email-обращению через Gmail: первое письмо, ответы клиента и наши ответы.
+model OutreachMessage {
+  id         String        @id @default(cuid())
+  outreachId String
+  direction  MailDirection
+  messageId  String?       @unique // Message-ID письма — по нему ответ находит свою переписку
+  fromAddr   String?
+  subject    String?
+  body       String
+  sentAt     DateTime? // OUT: отправлено; IN: получено
+  createdAt  DateTime      @default(now())
+
+  outreach Outreach @relation(fields: [outreachId], references: [id], onDelete: Cascade)
+
+  @@index([outreachId, createdAt])
 }
 
 // ---------------------------------------------------------------------------
