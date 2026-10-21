@@ -141,8 +141,8 @@ function startBot(withYandex: boolean) {
     APP_URL: "https://example.test", // не из .env: Prisma подмешивает его в окружение
     LEADS_PROPOSAL_ENGINE: "template", // тексты в проверках — шаблоном, без настоящего Claude
     LEADS_MAIL_POLL_MS: "0",
-    GMAIL_SMTP_HOST: "127.0.0.1", // в настоящий Gmail тест не ходит: соединение отклоняется
-    GMAIL_IMAP_HOST: "127.0.0.1",
+    MAIL_SMTP_HOST: "127.0.0.1", // в настоящую почту тест не ходит: соединение отклоняется
+    MAIL_IMAP_HOST: "127.0.0.1",
     TELEGRAM_API_ROOT: `http://127.0.0.1:${port}`,
     ...fakeSourcesEnv(port, withYandex),
   };
@@ -538,27 +538,28 @@ async function main() {
     const named = await waitMessage(mark, (m) => m.text.includes("Имя: Никита"), "имя в настройках");
     check("⚙️ подпись: имя сохраняется", (await prisma.leadSettings.findUnique({ where: { workspaceId: ws.id } }))?.senderName === "Никита");
 
-    // ===== Gmail: подключение (без настоящего Gmail — вход не удаётся) =====
-    check("⚙️ в настройках — Gmail и цены для Claude", named.text.includes("Письма через Gmail") && buttons(named.message_id).some((b) => b.text === "📧 Gmail"), named.text);
+    // ===== Почта: подключение (без настоящей почты — вход не удаётся) =====
+    check("⚙️ в настройках — почта и цены для Claude", named.text.includes("Письма с твоей почты") && buttons(named.message_id).some((b) => b.text === "📧 Почта"), named.text);
     mark = calls.length;
-    press(named.message_id, "📧 Gmail");
-    const gm = await waitMessage(mark, (m) => m.message_id === named.message_id && m.text.includes("GMAIL ДЛЯ ПИСЕМ"), "экран Gmail");
-    check("📧 Gmail: не подключён, есть кнопка «Подключить»", gm.text.includes("Не подключён") && buttons(gm.message_id).some((b) => b.text === "✏️ Подключить Gmail"));
+    press(named.message_id, "📧 Почта");
+    const gm = await waitMessage(mark, (m) => m.message_id === named.message_id && m.text.includes("ПОЧТА ДЛЯ ПИСЕМ"), "экран почты");
+    check("📧 Почта: не подключена, подходят Яндекс и Mail.ru, есть «Подключить»", gm.text.includes("Не подключена") && gm.text.includes("Яндекс Почта") && gm.text.includes("Mail.ru") && buttons(gm.message_id).some((b) => b.text === "✏️ Подключить почту"));
     mark = calls.length;
-    press(gm.message_id, "✏️ Подключить Gmail");
-    await waitMessage(mark, (m) => m.text.includes("Пришли адрес Gmail"), "запрос адреса");
+    press(gm.message_id, "✏️ Подключить почту");
+    await waitMessage(mark, (m) => m.text.includes("Пришли адрес почты"), "запрос адреса");
     mark = calls.length;
-    sendText("info@yandex.ru");
-    await waitMessage(mark, (m) => m.text.includes("Нужен адрес Gmail"), "не Gmail");
+    sendText("studio@outlook.com");
+    await waitMessage(mark, (m) => m.text.includes("Outlook и Hotmail не подходят"), "Outlook не подходит");
     mark = calls.length;
-    sendText("studio.test@gmail.com");
-    await waitMessage(mark, (m) => m.text.includes("пароль приложения"), "запрос пароля");
+    sendText("studio.test@yandex.ru");
+    const howTo = await waitMessage(mark, (m) => m.text.includes("пароль приложения"), "запрос пароля");
+    check("🔑 для Яндекса — как включить IMAP и получить пароль приложения", howTo.text.includes("imap.yandex.ru") && howTo.text.includes("id.yandex.ru"), howTo.text);
     mark = calls.length;
     const passwordMessageId = nextUserMessageId;
     sendText("abcd efgh ijkl mnop");
-    await waitMessage(mark, (m) => m.text.includes("Не достучался до Gmail") || m.text.includes("Google не принял"), "проверка входа");
+    await waitMessage(mark, (m) => m.text.includes("Не достучался до") || m.text.includes("не принимает пароль"), "проверка входа");
     check(
-      "🔑 сообщение с паролем удалено из чата; без входа в Gmail ящик не сохраняется",
+      "🔑 сообщение с паролем удалено из чата; без входа в почту ящик не сохраняется",
       calls.slice(mark).some((c) => c.method === "deleteMessage" && Number(c.body.message_id) === passwordMessageId) && !(await prisma.leadSettings.findUnique({ where: { workspaceId: ws.id } }))?.gmailUser
     );
 

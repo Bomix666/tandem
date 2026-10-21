@@ -116,7 +116,7 @@ function followUpOf(lead: LeadWithTaskLinks): LeadDTO["followUp"] {
 
 const OPEN_LABEL = { TELEGRAM: "💬 Открыть чат", WHATSAPP: "📱 Открыть WhatsApp", SOCIAL: "🌐 Открыть страницу" } as const;
 
-export function toOutreachDTO(o: OutreachWithLead, extra: { warnings: string[]; engine: string }): OutreachDTO {
+export function toOutreachDTO(o: OutreachWithLead, extra: { warnings: string[]; engine: string; mailbox?: string | null }): OutreachDTO {
   let openUrl: string | null = null;
   let openLabel: string | null = null;
   if (o.channel === "EMAIL") {
@@ -147,6 +147,7 @@ export function toOutreachDTO(o: OutreachWithLead, extra: { warnings: string[]; 
     engine: o.generator === "manual" ? extra.engine : generatorLabel(o.generator),
     openUrl,
     openLabel,
+    sendFrom: editable && o.channel === "EMAIL" && o.recipient && extra.mailbox ? extra.mailbox : null,
   };
 }
 

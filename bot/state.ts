@@ -18,9 +18,9 @@ export type ChatState =
   // Sales OS: свой текст обращения / своя дата follow-up
   | { kind: "outreach_edit"; outreachId: string; editorMessageId?: number; promptMessageId?: number }
   | { kind: "followup_date"; scope: "l" | "o"; id: string; promptMessageId?: number }
-  // Gmail (bot/leads/mail.ts): адрес, пароль приложения, цены для Claude, свой текст ответа
-  | { kind: "gmail_user"; promptMessageId?: number }
-  | { kind: "gmail_pass"; user: string; promptMessageId?: number }
+  // Почта (bot/leads/mail.ts): адрес, пароль приложения, цены для Claude, свой текст ответа
+  | { kind: "mail_user"; promptMessageId?: number }
+  | { kind: "mail_pass"; user: string; promptMessageId?: number }
   | { kind: "price_info"; promptMessageId?: number }
   | { kind: "reply_edit"; draftId: string; cardMessageId?: number; promptMessageId?: number };
 

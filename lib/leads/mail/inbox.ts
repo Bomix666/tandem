@@ -1,4 +1,4 @@
-// Ответы клиентов из Gmail. Письмо находит свою переписку по Message-ID
+// Ответы клиентов из подключённой почты. Письмо находит свою переписку по Message-ID
 // (In-Reply-To / References), а если почтовая программа клиента их потеряла —
 // по адресу отправителя. Первый ответ: обращение → «👀 Ответ получен», лид →
 // «💬 Переговоры», follow-up закрыт. Claude готовит черновик ответа, бот
@@ -10,7 +10,7 @@ import { redactError } from "../redact";
 import { getLeadSettings } from "../repository";
 import { AWAITING, getOutreachGenerator, setOutreachOutcome } from "../outreach";
 import { getMailAccount } from "./account";
-import { fetchNewMail, type IncomingMail } from "./gmail";
+import { fetchNewMail, type IncomingMail } from "./mailbox";
 import { draftReply, type ReplyIntent } from "./reply";
 
 type LeadRef = { id: string; name: string };
@@ -117,7 +117,7 @@ export async function handleIncoming(workspaceId: string, mail: IncomingMail): P
 
   if (mail.bounce) {
     // адрес не существует или ящик не принимает почту — больше на него не пишем
-    if (outreach.contactId) await prisma.leadContact.update({ where: { id: outreach.contactId }, data: { verification: "INVALID", checkNote: "Gmail: письмо не доставлено", checkedAt: new Date() } });
+    if (outreach.contactId) await prisma.leadContact.update({ where: { id: outreach.contactId }, data: { verification: "INVALID", checkNote: "Почта: письмо не доставлено", checkedAt: new Date() } });
     return { kind: "bounce", workspaceId, outreach, lead, address: mail.failedRecipients[0] ?? outreach.recipient ?? "" };
   }
 
@@ -144,7 +144,7 @@ export async function handleIncoming(workspaceId: string, mail: IncomingMail): P
 
 let polling = false;
 
-/** Проверка «Входящих» всех подключённых Gmail; по каждому событию — onEvent (уведомление в бот). */
+/** Проверка «Входящих» всех подключённых почт; по каждому событию — onEvent (уведомление в бот). */
 export async function pollInboxes(onEvent: (e: IncomingEvent) => Promise<void>) {
   if (polling) return;
   polling = true;
@@ -165,7 +165,7 @@ export async function pollInboxes(onEvent: (e: IncomingEvent) => Promise<void>) 
         }
         if (lastUid !== row.gmailLastUid) await prisma.leadSettings.update({ where: { workspaceId: row.workspaceId }, data: { gmailLastUid: lastUid } });
       } catch (err) {
-        console.error("Gmail inbox check failed:", redactError(err));
+        console.error("Mail inbox check failed:", redactError(err));
       }
     }
   } finally {

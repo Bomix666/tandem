@@ -378,6 +378,15 @@ async function main() {
     check("Gmail: пароль приложения в базе зашифрован", stored.gmailPassword !== "abcdefghijklmnop" && (await getMailAccount(ws.id))?.pass === "abcdefghijklmnop");
     const gPrep = await call(leadOutreach.POST as Handler, "POST", `/api/leads/${lv.id}/outreach`, 1, { channel: "EMAIL" }, { id: lv.id });
     const gid: string = gPrep.json.outreach.id;
+    check("Mini App: у черновика есть «📤 Отправить письмо» — с подключённой почты", gPrep.json.outreach.sendFrom === "studio.test@gmail.com", gPrep.json.outreach);
+    process.env.MAIL_SMTP_HOST = "127.0.0.1"; // почта недоступна — соединение отклоняется
+    const viaApp = await call(outreachOne.PATCH as Handler, "PATCH", `/api/leads/outreach/${gid}`, 1, { action: "send" }, { oid: gid });
+    delete process.env.MAIL_SMTP_HOST;
+    check(
+      "Mini App: «Отправить» без связи с почтой — понятная ошибка, письмо остаётся черновиком",
+      viaApp.status === 409 && String(viaApp.json.error).includes("Не достучался") && ["DRAFT", "READY"].includes((await prisma.outreach.findUniqueOrThrow({ where: { id: gid } })).status),
+      viaApp.json
+    );
     const sentFirst = await sendOutreachEmail(gid, ws.id, me.id, spy);
     const firstOut = await prisma.outreachMessage.findFirst({ where: { outreachId: gid, direction: "OUT" } });
     check(

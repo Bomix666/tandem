@@ -44,6 +44,7 @@ export function OutreachSheet({ outreachId, onClose, onChanged, onOpenLead, send
   const [picker, setPicker] = useState<"after-sent" | "manual" | null>(null);
   const [currentFollowUp, setCurrentFollowUp] = useState<string | null>(null);
   const [senderOpen, setSenderOpen] = useState(false);
+  const [confirmSend, setConfirmSend] = useState(false);
 
   useEffect(() => {
     setEditing(false);
@@ -115,6 +116,33 @@ export function OutreachSheet({ outreachId, onClose, onChanged, onOpenLead, send
     if (toast) showToast(toast);
     if (a === "sent") setPicker("after-sent");
     onChanged();
+  }
+
+  /** «📤 Отправить письмо»: с подключённой почты, после подтверждения. Ошибку почты показываем как есть. */
+  async function sendEmail() {
+    if (!shown) return;
+    haptic("medium");
+    setBusy("send");
+    try {
+      const r = await leadsApi.outreachAction(shown.id, "send");
+      load(r.outreach);
+      setConfirmSend(false);
+      hapticSuccess();
+      showToast(`📤 Письмо отправлено с ${shown.sendFrom}`);
+      setPicker("after-sent");
+      onChanged();
+    } catch (err) {
+      let text = "Не получилось отправить, попробуй ещё раз";
+      try {
+        const parsed = JSON.parse((err as Error).message);
+        if (typeof parsed === "string") text = parsed;
+      } catch {
+        // не JSON — общий текст
+      }
+      showToast(text);
+    } finally {
+      setBusy(null);
+    }
   }
 
   function openSend() {
@@ -203,7 +231,8 @@ export function OutreachSheet({ outreachId, onClose, onChanged, onOpenLead, send
               {editing ? <textarea className="editor-area" value={body} maxLength={4000} onChange={(e) => setBody(e.target.value)} /> : <div className="proposal">{shown.body}</div>}
               {shown.editable && !editing && (
                 <div className="proposal-meta">
-                  {shown.edited ? "Текст отредактирован вручную." : `Сделано: ${shown.engine}.`} Проверь перед отправкой — приложение ничего не отправляет само.
+                  {shown.edited ? "Текст отредактирован вручную." : `Сделано: ${shown.engine}.`}{" "}
+                  {shown.sendFrom ? `Проверь и нажми «📤 Отправить письмо» — уйдёт с ${shown.sendFrom}.` : "Проверь перед отправкой — приложение ничего не отправляет само."}
                 </div>
               )}
             </div>
@@ -249,8 +278,23 @@ export function OutreachSheet({ outreachId, onClose, onChanged, onOpenLead, send
                   </div>
                 ) : (
                   <>
+                    {shown.sendFrom &&
+                      (confirmSend ? (
+                        <div className="btn-row">
+                          <button className="primary-btn" onClick={sendEmail} disabled={busy === "send"}>
+                            {busy === "send" ? "Отправляю…" : `✅ Отправить на ${shown.recipient}`}
+                          </button>
+                          <button className="secondary-btn" onClick={() => setConfirmSend(false)} disabled={busy === "send"}>
+                            Отмена
+                          </button>
+                        </div>
+                      ) : (
+                        <button className="primary-btn" onClick={() => setConfirmSend(true)}>
+                          📤 Отправить письмо
+                        </button>
+                      ))}
                     {shown.openUrl && (
-                      <button className="primary-btn" onClick={openSend}>
+                      <button className={shown.sendFrom ? "secondary-btn" : "primary-btn"} onClick={openSend}>
                         {shown.openLabel}
                       </button>
                     )}

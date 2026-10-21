@@ -99,6 +99,8 @@ export interface OutreachDTO extends OutreachSummaryDTO {
    */
   openUrl: string | null;
   openLabel: string | null;
+  /** С какой подключённой почты письмо уйдёт по кнопке «📤 Отправить письмо»; null — кнопки нет. */
+  sendFrom: string | null;
 }
 
 export interface FollowUpDTO {

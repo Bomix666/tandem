@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { toOutreachDTO } from "@/lib/leads/dto";
 import { getOutreach, outreachWarnings, prepareOutreach } from "@/lib/leads/outreach";
+import { mailboxUser } from "@/lib/leads/mail/account";
 import { getLead } from "@/lib/leads/repository";
 import { leadsAuth, leadsError, notFound } from "@/lib/leads/route-helpers";
 import { publish } from "@/lib/pubsub";
@@ -22,7 +23,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
     const o = await getOutreach(p.outreach.id, workspace.id);
     if (!o) return notFound();
     if (!p.reused) publish({ type: "leads_changed", workspaceId: workspace.id });
-    return NextResponse.json({ outreach: toOutreachDTO(o, { warnings: await outreachWarnings(o), engine: p.engine }), reused: p.reused }, { status: p.reused ? 200 : 201 });
+    const mailbox = await mailboxUser(workspace.id);
+    return NextResponse.json({ outreach: toOutreachDTO(o, { warnings: await outreachWarnings(o), engine: p.engine, mailbox }), reused: p.reused }, { status: p.reused ? 200 : 201 });
   } catch (err) {
     return leadsError(err);
   }

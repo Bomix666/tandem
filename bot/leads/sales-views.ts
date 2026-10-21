@@ -188,14 +188,14 @@ export function outreachEditorView(o: OutreachWithLead, opts: { warnings: string
   if (o.repliedAt) lines.push(`👀 Ответ: ${formatDay(o.repliedAt)}`);
   if (EDITABLE.includes(o.status)) {
     lines.push(...opts.warnings.map((w) => `⚠️ ${e(w)}`));
-    const how = viaGmail ? "Проверь и нажми «📤 Отправить через Gmail»." : "Бот ничего не отправляет сам — проверь и отправь.";
+    const how = viaGmail ? "Проверь и нажми «📤 Отправить письмо»." : "Бот ничего не отправляет сам — проверь и отправь.";
     lines.push(`<i>${o.generator === "manual" ? "Текст отредактирован вручную" : `Сделано: ${e(opts.engine)}`}. ${how}</i>`);
   }
 
   const kb = new InlineKeyboard();
   const open = openButton(o, opts.mailUrl);
   if (EDITABLE.includes(o.status)) {
-    if (viaGmail) kb.text("📤 Отправить через Gmail", `ml:sq:${o.id}`).row();
+    if (viaGmail) kb.text("📤 Отправить письмо", `ml:sq:${o.id}`).row();
     kb.text("✏️ Редактировать", `os:oe:${o.id}`).text("📋 Копировать", `os:oc:${o.id}`).row();
     if (open) kb.url(open.text, open.url);
     kb.text("🔄 Другой вариант", `os:or:${o.id}`).row();
@@ -242,7 +242,7 @@ export function channelPickerView(lead: LeadWithTasks): View {
     `📱 <b>WhatsApp</b> — коротко и по-разговорному · ${has("whatsapp") || lead.phones.length ? "есть номер" : "<i>нет номера</i>"}`,
     `🌐 <b>Соцсети</b> — очень коротко · ${has("vk") || has("instagram") ? socials.filter((s) => s.type === "vk" || s.type === "instagram").map((s) => (s.type === "vk" ? "VK" : "Instagram")).join(", ") : "<i>нет страниц</i>"}`,
     "",
-    "<i>Без твоей кнопки ничего не отправляется: письмо — через Gmail, остальное — ты сам.</i>",
+    "<i>Без твоей кнопки ничего не отправляется: письмо — с твоей почты, остальное — ты сам.</i>",
   ];
   const kb = new InlineKeyboard()
     .text("📧 Email", `os:pe:${lead.id}`)

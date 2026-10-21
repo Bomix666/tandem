@@ -1,10 +1,12 @@
-// Gmail пространства для писем клиентам: адрес и пароль приложения Google
-// (не пароль от аккаунта — его Google не пускает в сторонние программы).
-// Пароль лежит в БД зашифрованным (AES-256-GCM), ключ — из секрета в .env:
-// без .env базу не расшифровать. Сменился секрет — Gmail подключают заново.
+// Почта пространства для писем клиентам (Яндекс, Mail.ru или Gmail): адрес и
+// пароль приложения — не пароль от аккаунта, по нему почты сторонние программы
+// не пускают. Пароль лежит в БД зашифрованным (AES-256-GCM), ключ — из секрета
+// в .env: без .env базу не расшифровать. Сменился секрет — почту подключают заново.
+// Поля в БД называются gmail* исторически — в них любая поддерживаемая почта.
 
 import crypto from "node:crypto";
 import { prisma } from "../../prisma";
+import { providerOf, type MailProviderId } from "./mailbox";
 
 export interface MailAccount {
   user: string;
@@ -38,15 +40,26 @@ export function decryptSecret(stored: string): string | null {
   }
 }
 
-/** Пароль приложения Google: 16 латинских букв, Google показывает их группами через пробел. */
-export function normalizeAppPassword(input: string): string | null {
+/**
+ * Пароль приложения: у Google — 16 латинских букв группами через пробел, у
+ * Яндекса и Mail.ru — строка без пробелов. Точно проверяет только вход в почту.
+ */
+export function normalizeAppPassword(provider: MailProviderId, input: string): string | null {
   const v = input.replace(/\s+/g, "");
-  return /^[a-z]{16}$/i.test(v) ? v.toLowerCase() : null;
+  if (provider === "gmail") return /^[a-z]{16}$/i.test(v) ? v.toLowerCase() : null;
+  return /^[\x21-\x7e]{8,64}$/.test(v) ? v : null;
 }
 
-export function normalizeGmail(input: string): string | null {
+/** Адрес поддерживаемой почты (Яндекс, Mail.ru, Gmail) в нижнем регистре. */
+export function normalizeMailbox(input: string): string | null {
   const v = input.trim().toLowerCase();
-  return /^[a-z0-9._%+-]+@(gmail|googlemail)\.com$/.test(v) ? v : null;
+  return /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(v) && providerOf(v) ? v : null;
+}
+
+/** Адрес подключённой почты (без расшифровки пароля) — для кнопки «Отправить письмо». */
+export async function mailboxUser(workspaceId: string): Promise<string | null> {
+  const s = await prisma.leadSettings.findUnique({ where: { workspaceId }, select: { gmailUser: true, gmailPassword: true } });
+  return s?.gmailUser && s.gmailPassword ? s.gmailUser : null;
 }
 
 export async function getMailAccount(workspaceId: string): Promise<MailAccount | null> {

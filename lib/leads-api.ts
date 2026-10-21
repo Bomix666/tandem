@@ -114,9 +114,9 @@ export function saveOutreachText(id: string, subject: string | null, body: strin
   return apiFetch<{ outreach: OutreachDTO }>(`/api/leads/outreach/${id}`, { method: "PATCH", body: JSON.stringify({ subject, body }) });
 }
 
-export type OutreachAction = "regenerate" | "ready" | "sent" | "replied" | "rejected" | "client";
+export type OutreachAction = "regenerate" | "ready" | "send" | "sent" | "replied" | "rejected" | "client";
 
-/** Отметки пользователя. «sent» — он отправил сам: приложение ничего не отправляет. */
+/** Действия с обращением. «send» — отправить с подключённой почты; «sent» — отметка, что отправил сам. */
 export function outreachAction(id: string, action: OutreachAction) {
   return apiFetch<{ outreach: OutreachDTO }>(`/api/leads/outreach/${id}`, { method: "PATCH", body: JSON.stringify({ action }) });
 }

@@ -475,7 +475,7 @@ export function settingsText(
     `Портфолио: ${v(s.portfolioUrl)}`,
     `Контакт: ${v(s.senderContact)}`,
     "",
-    "📧 <b>Письма через Gmail</b>",
+    "📧 <b>Письма с твоей почты</b>",
     `Ящик: ${s.gmailUser ? `✅ ${e(s.gmailUser)}` : "<i>не подключён</i>"}`,
     `Цены и сроки для ответов Claude: ${v(s.priceInfo)}`,
     "",
@@ -496,7 +496,7 @@ export function settingsKeyboard(): InlineKeyboard {
     .text("✏️ Портфолио", "ld:set:portfolio")
     .text("✏️ Контакт", "ld:set:contact")
     .row()
-    .text("📧 Gmail", "ml:gm")
+    .text("📧 Почта", "ml:gm")
     .text("💰 Цены и сроки", "ml:pr")
     .row()
     .text("🏠 Меню", "os:home");
